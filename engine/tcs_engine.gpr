@@ -21,7 +21,7 @@ project TCS_Engine is
      ("-gnat2012",
       "-gnatW8",          --  UTF-8 source (Thai keyword literals)
       "-gnatwa",          --  all warnings
-      "-gnatVA",          --  all validity checks (uninitialised / invalid data)
+      "-gnatVa",          --  all validity checks (uninitialised / invalid data)
       "-gnato",           --  integer overflow checks
       "-gnata",           --  Pre/Post/Loop_Invariant checked at run time too
       "-gnatf",           --  full error messages

@@ -5,7 +5,7 @@ Pure ASGI (not BaseHTTPMiddleware) so each layer runs before any routing or
 body parsing, adds negligible overhead, and cannot be bypassed by streaming.
 
 Order (outermost -> innermost) as wired in main.py:
-    RequestId -> SecurityHeaders -> TrustedHost -> RateLimit -> BodyLimit
+    RequestId -> SecurityHeaders -> HostAllowList -> RateLimit -> BodyLimit
     -> ContentType -> CORS -> FastAPI router
 """
 from __future__ import annotations
@@ -237,4 +237,31 @@ class ContentTypeMiddleware:
             if media != "application/json" or (params and params.replace(" ", "") != "charset=utf-8"):
                 await send_json_error(send, 415, "UNSUPPORTED_MEDIA_TYPE", _rid(scope))
                 return
+        await self.app(scope, receive, send)
+
+
+# ---------------------------------------------------------------------------
+class HostAllowListMiddleware:
+    """Host-header allow-list (blocks DNS-rebinding / cache-poisoning /
+    password-reset-link style Host attacks). The platform health probe on
+    /api/health is exempt because load balancers call it with an internal
+    Host header; that endpoint returns only {"status": ...}."""
+
+    EXEMPT_PATHS = frozenset({"/api/health"})
+
+    def __init__(self, app: ASGIApp, allowed_hosts: Iterable[str]) -> None:
+        self.app = app
+        self.allowed = frozenset(h.lower() for h in allowed_hosts)
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http" or scope.get("path") in self.EXEMPT_PATHS:
+            return await self.app(scope, receive, send)
+        raw = (_header(scope, b"host") or [""])[0].strip().lower()
+        if raw.startswith("["):                       # [ipv6]:port
+            host = raw[1:raw.find("]")] if "]" in raw else ""
+        else:
+            host = raw.rsplit(":", 1)[0] if raw.count(":") == 1 else raw
+        if host not in self.allowed:
+            await send_json_error(send, 400, "INVALID_HOST", _rid(scope))
+            return
         await self.app(scope, receive, send)

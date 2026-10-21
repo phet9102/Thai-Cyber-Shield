@@ -22,7 +22,6 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.cors import CORSMiddleware
-from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .config import load_settings
 from .engine import EngineRejectedInput, EngineUnavailable, SecureEngineRunner
@@ -32,6 +31,7 @@ from .sanitize import attack_signatures, fingerprint
 from .security import (
     BodyLimitMiddleware,
     ContentTypeMiddleware,
+    HostAllowListMiddleware,
     RateLimitMiddleware,
     RequestIdMiddleware,
     SecurityHeadersMiddleware,
@@ -81,7 +81,7 @@ app.add_middleware(
 app.add_middleware(ContentTypeMiddleware)
 app.add_middleware(BodyLimitMiddleware, settings=settings)
 app.add_middleware(RateLimitMiddleware, limiter=limiter, settings=settings)
-app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(settings.allowed_hosts))
+app.add_middleware(HostAllowListMiddleware, allowed_hosts=settings.allowed_hosts)
 app.add_middleware(SecurityHeadersMiddleware, settings=settings)
 app.add_middleware(RequestIdMiddleware)
 

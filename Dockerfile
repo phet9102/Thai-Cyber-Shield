@@ -40,7 +40,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 USER tcs
 EXPOSE 8000
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", \
-     "--no-server-header", "--no-proxy-headers", "--no-date-header", \
-     "--limit-concurrency", "256", "--timeout-keep-alive", "5", \
-     "--h11-max-incomplete-event-size", "16384"]
+# Render/Heroku-style platforms inject $PORT; default 8000 elsewhere
+CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} \
+     --no-server-header --no-proxy-headers --no-date-header \
+     --limit-concurrency 256 --timeout-keep-alive 5 \
+     --h11-max-incomplete-event-size 16384"]
