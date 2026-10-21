@@ -321,11 +321,13 @@ async def analyze_slip(request: Request, file: UploadFile = File(...),
 
     facts = extract_slip(vis.text, vis.qr_payloads)
 
+    # A CRC-valid QR reference is authoritative; OCR text is the fallback.
+    ref_any = facts.qr_ref or facts.ref
     duplicate = False
     store: Optional[ReportStore] = request.app.state.store
-    if store is not None and facts.ref:
+    if store is not None and ref_any:
         try:
-            duplicate = await asyncio.to_thread(store.slip_seen_elsewhere, facts.ref,
+            duplicate = await asyncio.to_thread(store.slip_seen_elsewhere, ref_any,
                                                 _client_key(request))
         except Exception:
             log.exception("slip duplicate check failed rid=%s", _rid(request))
@@ -343,10 +345,10 @@ async def analyze_slip(request: Request, file: UploadFile = File(...),
 
     qr_info = parse_slip_qr(facts.qr) if facts.qr else None
     slip = SlipOut(
-        bank=facts.bank,
+        bank=facts.bank if facts.bank != "UNKNOWN" else (facts.qr_bank or "UNKNOWN"),
         amount=facts.amount,
         time=facts.when.strftime("%d/%m/%Y %H:%M") if facts.when else None,
-        ref_tail=facts.ref[-4:] if facts.ref else None,
+        ref_tail=ref_any[-4:] if ref_any else None,
         qr_found=bool(facts.qr),
         qr_valid=(bool(qr_info and qr_info["crc_ok"]) if facts.qr else None),
     )

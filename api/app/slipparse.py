@@ -51,12 +51,30 @@ _EN_MONTHS = {m: i + 1 for i, m in enumerate(
 
 _THAI_DIGITS = str.maketrans("๐๑๒๓๔๕๖๗๘๙", "0123456789")
 
+# Label only. The value is searched in a window AFTER the label, because on
+# real slips (e.g. K PLUS) the value sits on the next line and OCR often
+# merges unrelated text (the "สแกนตรวจสอบสลิป" caption under the QR) in
+# between. Thai OCR also drops tone marks ("เลขทีรายการ"), hence the `?`.
 _REF_LABEL = re.compile(
-    r"(เลขที่รายการ|รหัสอ้างอิง|เลขที่อ้างอิง|หมายเลขอ้างอิง|รหัสรายการ|"
-    r"transaction\s*id|trans(?:action)?\s*ref|ref(?:erence)?\s*(?:no\.?|id)?)\s*[:：]?\s*"
-    r"([A-Za-z0-9]{8,40})",
+    r"(เลขที่?\s*รายการ|รหัส\s*อ้างอิง|เลขที่?\s*อ้างอิง|หมายเลข\s*อ้างอิง|รหัส\s*รายการ|"
+    r"transaction\s*id|trans(?:action)?\s*ref|ref(?:erence)?\s*(?:no\.?|id)?)\s*[:：]?",
     re.IGNORECASE,
 )
+_REF_TOKEN = re.compile(r"(?<![A-Za-z0-9])([A-Za-z0-9]{10,40})(?![A-Za-z0-9])")
+_REF_WINDOW = 200          # characters after the label to search for the value
+
+# Bank codes used in tag 00/01 of the slip-verification mini-QR.
+_QR_BANK_CODES = {
+    "002": "BBL", "004": "KBANK", "006": "KTB", "011": "TTB", "014": "SCB",
+    "022": "CIMB", "024": "UOB", "025": "BAY", "030": "GSB", "033": "GHB",
+    "034": "BAAC", "067": "TISCO", "069": "KKP", "073": "LHB",
+}
+
+# K PLUS reference: 0 + 2 digits, day-of-year (3), HHMMSS (6), letters ...
+# Verified against one real K PLUS slip (ref 016281125152BPM14801 printed on
+# a slip dated 8 Oct 2026 12:51 -> day 281, 12:51:52). Other banks: unknown
+# until real samples are collected - do NOT add formats without a sample.
+_KBANK_REF = re.compile(r"^0\d{2}(\d{3})([01]\d|2[0-3])([0-5]\d)([0-5]\d)[A-Z]")
 _AMOUNT_LABEL = re.compile(
     r"(จำนวนเงิน|จำนวน|ยอดเงิน|ยอดโอน|amount)\s*[:：]?\s*"
     r"([0-9]{1,3}(?:,[0-9]{3}){0,4}(?:\.[0-9]{1,2})?|[0-9]{1,11}(?:\.[0-9]{1,2})?)",
@@ -71,6 +89,20 @@ _DATE_NUMERIC = re.compile(r"(?<!\d)(\d{1,2})[/\-.](\d{1,2})[/\-.](\d{2,4})(?!\d
 _DATE_WORD = re.compile(r"(?<!\d)(\d{1,2})\s*([^\s\d]{2,12})\s*(\d{2,4})(?!\d)")
 
 
+def _abbr_pattern(abbr: str) -> str:
+    # "ต.ค." -> "ต\s*\.?\s*ค\s*\.?" : OCR splits or drops the dots ("ต. ค.", "ต.ค", "ตค")
+    letters = [ch for ch in abbr if ch != "."]
+    return r"\s*\.?\s*".join(re.escape(ch) for ch in letters) + r"\s*\.?"
+
+
+_THAI_ABBR = {k: v for k, v in _THAI_MONTHS.items() if k.endswith(".")}
+_DATE_THAI_ABBR = re.compile(
+    r"(?<!\d)(\d{1,2})\s*(" + "|".join(
+        _abbr_pattern(k) for k in sorted(_THAI_ABBR, key=len, reverse=True)
+    ) + r")\s*(\d{2,4})(?!\d)"
+)
+
+
 @dataclass
 class SlipFacts:
     bank: str = "UNKNOWN"
@@ -78,7 +110,10 @@ class SlipFacts:
     amount: Optional[str] = None          # normalised "1500.00"
     amount_raw: Optional[str] = None      # as printed, for the consistency check
     when: Optional[datetime] = None
+    when_from_ref: bool = False           # time derived from the reference, not printed text
     qr: Optional[str] = None
+    qr_bank: Optional[str] = None         # from a CRC-valid QR only
+    qr_ref: Optional[str] = None          # from a CRC-valid QR only
 
 
 def _year(y: int) -> Optional[int]:
@@ -107,8 +142,13 @@ def _parse_datetime(text: str) -> Optional[datetime]:
     day = month = year = None
 
     m = _DATE_NUMERIC.search(t)
+    a = _DATE_THAI_ABBR.search(t)
     if m:
         day, month, year = int(m.group(1)), int(m.group(2)), _year(int(m.group(3)))
+    elif a:
+        abbr = re.sub(r"[\s.]", "", a.group(2))
+        month = next(v for k, v in _THAI_ABBR.items() if k.replace(".", "") == abbr)
+        day, year = int(a.group(1)), _year(int(a.group(3)))
     else:
         for m in _DATE_WORD.finditer(t):
             word = m.group(2).strip().lower().replace(" ", "")
@@ -144,14 +184,43 @@ def _normalise_amount(raw: str) -> Optional[str]:
     return f"{int(v)}.00"
 
 
-def extract_slip(text: str, qr_payloads: List[str]) -> SlipFacts:
+def _find_ref(t: str) -> Optional[str]:
+    """First reference-like token (>= 6 digits, not a masked account) that
+    follows a reference label within _REF_WINDOW characters."""
+    for lab in _REF_LABEL.finditer(t):
+        window = t[lab.end(): lab.end() + _REF_WINDOW]
+        for tok in _REF_TOKEN.finditer(window):
+            v = tok.group(1)
+            if sum(ch.isdigit() for ch in v) >= 6 and "xx" not in v.lower():   # "xx" = masked
+                return v
+    return None
+
+
+def time_from_kbank_ref(ref: str, now: datetime) -> Optional[datetime]:
+    """Most recent date (<= now + 1 day) whose day-of-year matches the ref."""
+    m = _KBANK_REF.match(ref.upper())
+    if not m:
+        return None
+    doy, hh, mm = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    if not 1 <= doy <= 366:
+        return None
+    now = now.astimezone(BANGKOK)
+    for year in (now.year, now.year - 1):
+        try:
+            d = datetime(year, 1, 1, hh, mm, tzinfo=BANGKOK) + timedelta(days=doy - 1)
+        except ValueError:
+            continue
+        if d.year == year and d <= now + timedelta(days=1):
+            return d
+    return None
+
+
+def extract_slip(text: str, qr_payloads: List[str],
+                 now: Optional[datetime] = None) -> SlipFacts:
     facts = SlipFacts()
     t = text.translate(_THAI_DIGITS)
     facts.bank = detect_bank(t)
-
-    m = _REF_LABEL.search(t)
-    if m:
-        facts.ref = m.group(2)
+    facts.ref = _find_ref(t)
 
     m = _AMOUNT_LABEL.search(t)
     raw = m.group(2) if m else None
@@ -171,6 +240,23 @@ def extract_slip(text: str, qr_payloads: List[str]) -> SlipFacts:
             break
     if facts.qr is None and qr_payloads:
         facts.qr = qr_payloads[0]
+
+    # Facts proven by a CRC-valid QR. Kept SEPARATE from the OCR fields so
+    # the engine's QR-vs-printed cross-checks stay meaningful; they are used
+    # for display, duplicate detection and the time fallback only.
+    info = parse_slip_qr(facts.qr) if facts.qr else None
+    if info and info["crc_ok"]:
+        facts.qr_bank = _QR_BANK_CODES.get(info["bank_code"])
+        facts.qr_ref = info["ref"]
+
+    # Printed date unreadable -> derive it from a K PLUS reference so the
+    # engine's stale/future-slip checks still run.
+    if facts.when is None:
+        bank = facts.bank if facts.bank != "UNKNOWN" else facts.qr_bank
+        ref = facts.qr_ref or facts.ref
+        if bank == "KBANK" and ref:
+            facts.when = time_from_kbank_ref(ref, now or datetime.now(BANGKOK))
+            facts.when_from_ref = facts.when is not None
     return facts
 
 
