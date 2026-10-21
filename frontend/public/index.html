@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>Thai Cyber Shield — ตรวจข้อความ ลิงก์ และเบอร์โทรก่อนกด</title>
-  <meta name="description" content="ตรวจ SMS ลิงก์ และเบอร์โทรที่น่าสงสัยว่าเป็นมิจฉาชีพหรือไม่ ก่อนกดหรือโทรกลับ">
+  <title>Thai Cyber Shield — ตรวจแชท สลิป ลิงก์ และเบอร์โทรก่อนโอน</title>
+  <meta name="description" content="ตรวจแชทซื้อขาย สลิปโอนเงิน ลิงก์ Facebook และเบอร์โทรที่น่าสงสัย ก่อนโอนเงินหรือส่งของ">
   <meta name="color-scheme" content="dark">
   <meta name="theme-color" content="#0D1330">
   <meta name="referrer" content="no-referrer">
@@ -26,7 +26,7 @@
 
   <div class="sky" aria-hidden="true"></div>
 
-  <header class="relative z-10 mx-auto flex max-w-5xl items-center justify-between px-5 pt-6 sm:px-8">
+  <header class="relative z-10 mx-auto flex max-w-6xl items-center justify-between gap-4 px-5 pt-6 sm:px-8">
     <div class="flex items-center gap-3">
       <svg class="h-9 w-9 text-signal" viewBox="0 0 32 32" fill="none" aria-hidden="true">
         <path d="M16 2.5 4.5 7v8.2c0 7 4.9 12.3 11.5 14.3 6.6-2 11.5-7.3 11.5-14.3V7L16 2.5Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
@@ -34,49 +34,87 @@
       </svg>
       <span class="font-display text-lg font-semibold tracking-tight">Thai Cyber Shield</span>
     </div>
-    <a class="hotline-chip" href="tel:1441">
-      <span class="sr-only">โทรแจ้งเหตุ</span>
-      สายด่วน 1441
-    </a>
+    <div class="flex items-center gap-3">
+      <p id="warm-status" class="warm-status hidden" role="status" aria-live="polite"></p>
+      <a class="hotline-chip" href="tel:1441">
+        <span class="sr-only">โทรแจ้งเหตุ</span>
+        สายด่วน 1441
+      </a>
+    </div>
   </header>
 
-  <main id="checker" class="relative z-10 mx-auto max-w-5xl px-5 pb-16 pt-10 sm:px-8 sm:pt-14">
+  <main id="checker" class="relative z-10 mx-auto max-w-6xl px-5 pb-16 pt-10 sm:px-8 sm:pt-14">
     <section class="max-w-2xl">
       <h1 class="font-display text-[2.1rem] font-bold leading-[1.15] tracking-tight sm:text-5xl">
-        ได้ข้อความแปลก ๆ มา?<br>ตรวจก่อนกด
+        ก่อนโอน ก่อนส่งของ<br>ตรวจที่นี่ก่อน
       </h1>
       <p class="mt-4 max-w-xl text-base leading-relaxed text-muted sm:text-lg">
-        วาง SMS ลิงก์ หรือเบอร์โทรที่สงสัย ระบบจะบอกว่าเสี่ยงแค่ไหนและเพราะอะไร
-        เราไม่เก็บข้อความของคุณ
+        วางแชทซื้อขาย อัปโหลดสลิป หรือแปะลิงก์ Facebook และเบอร์โทรที่สงสัย
+        ระบบจะบอกว่าเสี่ยงแค่ไหน เพราะอะไร และเคยมีคนแจ้งเบาะแสไว้หรือไม่
       </p>
     </section>
 
-    <div class="mt-10 grid gap-6 lg:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)]">
+    <div class="mt-10 grid gap-6 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)]">
 
       <!-- ============ Input panel ============ -->
       <section class="glass p-5 sm:p-7" aria-labelledby="input-title">
         <h2 id="input-title" class="sr-only">สิ่งที่ต้องการตรวจ</h2>
 
         <div class="segmented" role="tablist" aria-label="ประเภทที่ต้องการตรวจ">
-          <button type="button" role="tab" id="tab-sms" aria-controls="checker-form" aria-selected="true" data-mode="sms" class="segment">ข้อความ SMS</button>
-          <button type="button" role="tab" id="tab-url" aria-controls="checker-form" aria-selected="false" tabindex="-1" data-mode="url" class="segment">ลิงก์</button>
+          <button type="button" role="tab" id="tab-trade" aria-controls="checker-form" aria-selected="true" data-mode="trade" class="segment">แชทซื้อขาย</button>
+          <button type="button" role="tab" id="tab-slip" aria-controls="checker-form" aria-selected="false" tabindex="-1" data-mode="slip" class="segment">สลิปโอนเงิน</button>
+          <button type="button" role="tab" id="tab-link" aria-controls="checker-form" aria-selected="false" tabindex="-1" data-mode="link" class="segment">ลิงก์ / Facebook</button>
           <button type="button" role="tab" id="tab-phone" aria-controls="checker-form" aria-selected="false" tabindex="-1" data-mode="phone" class="segment">เบอร์โทร</button>
+          <button type="button" role="tab" id="tab-sms" aria-controls="checker-form" aria-selected="false" tabindex="-1" data-mode="sms" class="segment">SMS</button>
         </div>
 
-        <form id="checker-form" class="mt-6" role="tabpanel" aria-labelledby="tab-sms" novalidate autocomplete="off">
-          <label id="field-label" for="field-text" class="block font-display text-base font-semibold">ข้อความที่ได้รับ</label>
-          <p id="field-hint" class="mt-1 text-sm text-muted">คัดลอกข้อความทั้งหมดมาวาง รวมลิงก์และเบอร์โทรในข้อความด้วย</p>
+        <form id="checker-form" class="mt-6" role="tabpanel" aria-labelledby="tab-trade" novalidate autocomplete="off">
+          <!-- text input -->
+          <div id="text-wrap">
+            <label id="field-label" for="field-text" class="block font-display text-base font-semibold">ข้อความแชท</label>
+            <p id="field-hint" class="mt-1 text-sm text-muted">คัดลอกบทสนทนามาวาง หรืออัปโหลดภาพหน้าจอแชทด้านล่าง</p>
 
-          <textarea id="field-text" name="text" rows="6" maxlength="1000"
-            class="field mt-3" spellcheck="false" autocapitalize="off" autocorrect="off"
-            aria-describedby="field-hint field-error field-count" required></textarea>
+            <textarea id="field-text" name="text" rows="6" maxlength="4000"
+              class="field mt-3" spellcheck="false" autocapitalize="off" autocorrect="off"
+              aria-describedby="field-hint field-error field-count"></textarea>
 
-          <div class="mt-2 flex items-start justify-between gap-4 text-sm">
-            <p id="field-error" class="min-h-[1.25rem] text-danger" role="alert"></p>
-            <p id="field-count" class="shrink-0 tabular-nums text-muted" aria-live="off">0 / 1000</p>
+            <div class="mt-2 flex items-start justify-between gap-4 text-sm">
+              <p id="field-error" class="min-h-[1.25rem] text-danger" role="alert"></p>
+              <p id="field-count" class="shrink-0 tabular-nums text-muted" aria-live="off">0 / 4000</p>
+            </div>
           </div>
 
-          <div class="mt-4 flex flex-wrap items-center gap-3">
+          <!-- image upload -->
+          <div id="upload-wrap" class="mt-2">
+            <p id="upload-label" class="font-display text-base font-semibold">ภาพหน้าจอแชท (ไม่บังคับ)</p>
+            <label for="file-input" id="dropzone" class="dropzone mt-2">
+              <svg class="h-7 w-7 shrink-0 text-signal" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path d="M4 16.5V19a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-2.5M12 15V4m0 0L7.5 8.5M12 4l4.5 4.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+              <span>
+                <span class="block font-medium text-ink">แตะเพื่อเลือกรูป หรือลากรูปมาวาง</span>
+                <span class="block text-sm text-muted">PNG, JPG หรือ WebP ไม่เกิน 5 MB</span>
+              </span>
+            </label>
+            <input id="file-input" type="file" accept="image/png,image/jpeg,image/webp" class="sr-only">
+            <div id="preview" class="preview mt-3 hidden">
+              <img id="preview-img" alt="ภาพที่เลือก" class="preview-img">
+              <div class="min-w-0">
+                <p id="preview-name" class="truncate text-sm text-ink"></p>
+                <button id="preview-remove" type="button" class="btn-ghost mt-1 !px-0 !py-1">เอารูปออก</button>
+              </div>
+            </div>
+            <p id="upload-error" class="mt-2 min-h-[1.25rem] text-sm text-danger" role="alert"></p>
+          </div>
+
+          <!-- expected amount (slip only) -->
+          <div id="expected-wrap" class="mt-1 hidden">
+            <label for="expected-input" class="block font-display text-base font-semibold">ยอดที่ควรได้รับ (ไม่บังคับ)</label>
+            <p class="mt-1 text-sm text-muted">ใส่ยอดที่ตกลงกันไว้ ระบบจะเทียบกับยอดในสลิป</p>
+            <input id="expected-input" type="text" inputmode="decimal" maxlength="16" class="field mt-2 max-w-xs" placeholder="เช่น 1500">
+          </div>
+
+          <div class="mt-5 flex flex-wrap items-center gap-3">
             <button id="submit-btn" type="submit" class="btn-primary">
               <span class="btn-label">ตรวจเลย</span>
               <span class="spinner" aria-hidden="true"></span>
@@ -109,9 +147,20 @@
 
         <p id="result-host" class="host-line mt-5 hidden"></p>
 
+        <div id="slip-wrap" class="mt-6 hidden">
+          <h3 class="font-display text-base font-semibold">ข้อมูลที่อ่านได้จากสลิป</h3>
+          <dl id="slip-facts" class="facts mt-3"></dl>
+        </div>
+
         <div id="reasons-wrap" class="mt-6 hidden">
           <h3 class="font-display text-base font-semibold">เหตุผลที่ระบบพบ</h3>
           <ul id="reasons" class="reasons mt-3"></ul>
+        </div>
+
+        <div id="ids-wrap" class="mt-6 hidden">
+          <h3 class="font-display text-base font-semibold">ประวัติการแจ้งเบาะแส</h3>
+          <p class="mt-1 text-xs text-muted">นับจากรายงานของผู้ใช้ ระบบเก็บเป็นรหัสลับทางเดียว ไม่เก็บเบอร์หรือเลขบัญชีจริง</p>
+          <ul id="ids" class="ids mt-3"></ul>
         </div>
 
         <div id="advice" class="advice mt-6 hidden">
@@ -119,31 +168,98 @@
           <ul id="advice-list" class="mt-2 space-y-1.5 text-sm leading-relaxed"></ul>
         </div>
 
+        <details id="ocr-wrap" class="ocr mt-6 hidden">
+          <summary>ข้อความที่ระบบอ่านได้จากภาพ <span id="ocr-conf" class="text-muted"></span></summary>
+          <p id="ocr-text" class="ocr-text"></p>
+        </details>
+
         <div id="error-box" class="error-box mt-6 hidden" role="alert">
           <p id="error-text" class="text-sm leading-relaxed"></p>
           <button id="retry-btn" type="button" class="btn-ghost mt-3">ลองอีกครั้ง</button>
         </div>
+
+        <!-- ============ Report ============ -->
+        <div class="report mt-6">
+          <button id="report-open" type="button" class="btn-report" aria-expanded="false" aria-controls="report-form">
+            แจ้งเบาะแสมิจฉาชีพ
+          </button>
+          <form id="report-form" class="report-form mt-4 hidden" novalidate autocomplete="off">
+            <p class="text-sm leading-relaxed text-muted">
+              ใส่ข้อมูลที่มิจฉาชีพใช้ อย่างน้อย 1 ช่อง ข้อมูลจะถูกแปลงเป็นรหัสลับก่อนบันทึก
+              และใช้เพื่อเตือนผู้ใช้คนอื่นเท่านั้น
+            </p>
+            <label class="mt-4 block text-sm font-medium" for="rep-category">ประเภทการโกง</label>
+            <select id="rep-category" class="field mt-1">
+              <option value="item_trade">ซื้อขายไอเทม/ไอดีเกม</option>
+              <option value="online_shopping">ซื้อของออนไลน์ไม่ได้ของ</option>
+              <option value="fake_slip">ส่งสลิปปลอม</option>
+              <option value="call_center">แก๊งคอลเซ็นเตอร์</option>
+              <option value="investment">หลอกลงทุน</option>
+              <option value="loan">หลอกปล่อยกู้</option>
+              <option value="job">หลอกทำงานออนไลน์</option>
+              <option value="romance">หลอกให้รัก</option>
+              <option value="phishing">ลิงก์/เว็บปลอม</option>
+              <option value="other">อื่น ๆ</option>
+            </select>
+            <div class="mt-3 grid gap-3 sm:grid-cols-2">
+              <div>
+                <label class="block text-sm font-medium" for="rep-phone">เบอร์โทร</label>
+                <input id="rep-phone" type="text" inputmode="tel" maxlength="32" class="field mt-1">
+              </div>
+              <div>
+                <label class="block text-sm font-medium" for="rep-bank">เลขบัญชีธนาคาร</label>
+                <input id="rep-bank" type="text" inputmode="numeric" maxlength="32" class="field mt-1">
+              </div>
+              <div>
+                <label class="block text-sm font-medium" for="rep-facebook">ลิงก์ Facebook</label>
+                <input id="rep-facebook" type="text" inputmode="url" maxlength="512" class="field mt-1">
+              </div>
+              <div>
+                <label class="block text-sm font-medium" for="rep-email">อีเมล</label>
+                <input id="rep-email" type="text" inputmode="email" maxlength="254" class="field mt-1">
+              </div>
+            </div>
+            <label class="consent mt-4">
+              <input id="rep-consent" type="checkbox">
+              <span>ยืนยันว่าเป็นข้อมูลจริงจากเหตุการณ์ที่เกิดขึ้น และเข้าใจว่าการแจ้งข้อมูลเท็จอาจมีความผิดตามกฎหมาย</span>
+            </label>
+            <p id="rep-error" class="mt-2 min-h-[1.25rem] text-sm text-danger" role="alert"></p>
+            <p id="rep-done" class="mt-2 hidden text-sm text-safe" role="status"></p>
+            <div class="mt-2 flex flex-wrap gap-3">
+              <button id="rep-submit" type="submit" class="btn-primary !py-2.5">
+                <span class="btn-label">ส่งเบาะแส</span>
+                <span class="spinner" aria-hidden="true"></span>
+              </button>
+              <button id="rep-cancel" type="button" class="btn-ghost">ยกเลิก</button>
+            </div>
+          </form>
+        </div>
       </section>
     </div>
 
-    <section class="mt-14 grid gap-6 text-sm leading-relaxed text-muted sm:grid-cols-3" aria-label="ข้อควรรู้">
+    <section class="mt-14 grid gap-6 text-sm leading-relaxed text-muted sm:grid-cols-2 lg:grid-cols-4" aria-label="ข้อควรรู้">
       <div>
-        <h2 class="font-display text-base font-semibold text-ink">หน่วยงานจริงไม่ส่งลิงก์ให้กรอกข้อมูล</h2>
-        <p class="mt-2">ธนาคาร สรรพากร การไฟฟ้า และตำรวจ ไม่ขอรหัส OTP หรือให้โอนเงินไป “บัญชีปลอดภัย” ผ่าน SMS หรือ LINE</p>
+        <h2 class="font-display text-base font-semibold text-ink">สลิปไม่ใช่หลักฐานว่าเงินเข้า</h2>
+        <p class="mt-2">ก่อนส่งของ ให้เปิดแอปธนาคารของคุณเองแล้วดูว่ายอดเข้าจริง สลิปปลอมทำได้ง่ายมาก</p>
       </div>
       <div>
-        <h2 class="font-display text-base font-semibold text-ink">เบอร์ที่ขึ้นต้น +697 หรือ +698</h2>
-        <p class="mt-2">เป็นรหัสประเทศที่ไม่มีอยู่จริง มักเป็นสายจากแก๊งคอลเซ็นเตอร์ที่ปลอมเบอร์ ไม่ควรรับหรือโทรกลับ</p>
+        <h2 class="font-display text-base font-semibold text-ink">เลือกคนกลางเอง</h2>
+        <p class="mt-2">ถ้าอีกฝ่ายบอกว่า “ไม่รับกลาง” หรือให้ใช้ “กลางของผม” ให้หยุดทันที เพราะคนกลางนั้นคือพวกเดียวกัน</p>
+      </div>
+      <div>
+        <h2 class="font-display text-base font-semibold text-ink">เบอร์ +697 หรือ +698</h2>
+        <p class="mt-2">เป็นรหัสประเทศที่ไม่มีอยู่จริง มักเป็นสายจากแก๊งคอลเซ็นเตอร์ที่ปลอมเบอร์</p>
       </div>
       <div>
         <h2 class="font-display text-base font-semibold text-ink">ถ้าเผลอโอนเงินไปแล้ว</h2>
-        <p class="mt-2">โทร 1441 (ศูนย์ AOC) หรือธนาคารของคุณทันทีเพื่อขออายัดบัญชีปลายทาง ยิ่งเร็วยิ่งมีโอกาสได้เงินคืน</p>
+        <p class="mt-2">โทร 1441 (ศูนย์ AOC) หรือธนาคารของคุณทันทีเพื่อขออายัดบัญชีปลายทาง</p>
       </div>
     </section>
   </main>
 
-  <footer class="relative z-10 mx-auto max-w-5xl px-5 pb-10 text-xs text-muted sm:px-8">
-    ผลการตรวจเป็นการประเมินด้วยกฎตรวจจับ ไม่ใช่การรับรอง หากไม่แน่ใจ ให้ติดต่อหน่วยงานผ่านช่องทางทางการโดยตรง
+  <footer class="relative z-10 mx-auto max-w-6xl px-5 pb-10 text-xs leading-relaxed text-muted sm:px-8">
+    ผลการตรวจเป็นการประเมินด้วยกฎตรวจจับและรายงานจากผู้ใช้ ไม่ใช่การรับรองหรือคำตัดสินว่าบุคคลใดกระทำผิด
+    ภาพที่อัปโหลดใช้เพื่ออ่านข้อความแล้วทิ้งทันที ไม่ถูกบันทึก
   </footer>
 </body>
 </html>

@@ -58,13 +58,18 @@ html { background: var(--night); }
   .hotline-chip:hover { background: rgba(255, 93, 115, 0.12); }
 
   /* Segmented control */
+  /* Five modes: a scrollable strip on phones, an even grid from sm up */
   .segmented {
-    @apply grid grid-cols-3 gap-1 rounded-2xl p-1;
+    @apply flex gap-1 overflow-x-auto rounded-2xl p-1 sm:grid sm:grid-cols-5 sm:overflow-visible;
     background: rgba(13, 19, 48, 0.7);
     border: 1px solid rgba(232, 236, 255, 0.07);
+    scrollbar-width: none;
+    scroll-snap-type: x proximity;
   }
+  .segmented::-webkit-scrollbar { display: none; }
   .segment {
-    @apply rounded-xl px-2 py-2.5 text-sm font-medium text-muted transition-colors sm:text-base;
+    @apply shrink-0 whitespace-nowrap rounded-xl px-3 py-2.5 text-sm font-medium text-muted transition-colors;
+    scroll-snap-align: start;
   }
   .segment:hover { color: var(--ink); }
   .segment[aria-selected="true"] {
@@ -211,6 +216,68 @@ html { background: var(--night); }
     border: 1px solid rgba(255, 181, 71, 0.3);
     color: #FFE2B3;
   }
+
+  .warm-status {
+    @apply rounded-full px-3 py-1 text-xs;
+    color: var(--caution);
+    background: rgba(255, 181, 71, 0.1);
+    border: 1px solid rgba(255, 181, 71, 0.25);
+  }
+  .warm-status.hidden { display: none; }
+
+  /* Upload */
+  .dropzone {
+    @apply flex cursor-pointer items-center gap-4 rounded-2xl px-4 py-4 transition-colors;
+    background: rgba(13, 19, 48, 0.55);
+    border: 1.5px dashed rgba(92, 225, 230, 0.35);
+  }
+  .dropzone:hover,
+  .dropzone.is-over { background: rgba(92, 225, 230, 0.08); border-color: var(--signal); }
+  #file-input:focus-visible + .dropzone,
+  .dropzone:focus-within { outline: 2px solid var(--signal); outline-offset: 3px; }
+  .preview { @apply flex items-center gap-4; }
+  .preview.hidden { display: none; }
+  .preview-img {
+    @apply h-20 w-20 shrink-0 rounded-xl object-cover;
+    border: 1px solid rgba(232, 236, 255, 0.12);
+  }
+
+  /* Slip facts */
+  .facts { @apply grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-2 text-sm; }
+  .facts dt { color: var(--muted); }
+  .facts dd { @apply min-w-0 break-words text-ink; }
+
+  /* Identifier reputation */
+  .ids > li {
+    @apply flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 py-2 text-sm;
+    border-top: 1px solid rgba(232, 236, 255, 0.07);
+  }
+  .ids > li:first-child { border-top: 0; }
+  .id-value { @apply min-w-0 break-all; }
+  .id-rep { @apply shrink-0 text-xs; color: var(--muted); }
+  .id-rep[data-hot="true"] { color: var(--danger); font-weight: 600; }
+
+  .ocr summary { @apply cursor-pointer text-sm font-medium; color: var(--muted); }
+  .ocr summary:hover { color: var(--ink); }
+  .ocr-text {
+    @apply mt-3 max-h-60 overflow-y-auto whitespace-pre-wrap rounded-xl p-3 text-xs leading-relaxed;
+    background: rgba(13, 19, 48, 0.6);
+    color: var(--muted);
+  }
+
+  /* Report */
+  .report { border-top: 1px solid rgba(232, 236, 255, 0.08); padding-top: 1.25rem; }
+  .btn-report {
+    @apply rounded-xl px-4 py-2.5 text-sm font-semibold transition-colors;
+    color: #FFC2CB;
+    border: 1px solid rgba(255, 93, 115, 0.45);
+  }
+  .btn-report:hover { background: rgba(255, 93, 115, 0.12); }
+  .btn-report:focus-visible { outline: 2px solid var(--danger); outline-offset: 3px; }
+  .report-form.hidden { display: none; }
+  .consent { @apply flex items-start gap-3 text-sm leading-relaxed; }
+  .consent input { @apply mt-1 h-4 w-4 shrink-0; accent-color: var(--signal); }
+  select.field { appearance: auto; }
 
   /* The single orchestrated moment: result reveal */
   .reveal { animation: reveal 0.45s cubic-bezier(0.22, 1, 0.36, 1); }
