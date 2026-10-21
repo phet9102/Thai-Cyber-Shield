@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="th" class="h-full">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Thai Cyber Shield — ตรวจข้อความ ลิงก์ และเบอร์โทรก่อนกด</title>
+  <meta name="description" content="ตรวจ SMS ลิงก์ และเบอร์โทรที่น่าสงสัยว่าเป็นมิจฉาชีพหรือไม่ ก่อนกดหรือโทรกลับ">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#0D1330">
+  <meta name="referrer" content="no-referrer">
+  <!-- API origin. Must also be listed in connect-src of the CSP in vercel.json -->
+  <meta name="tcs-api-base" content="https://api.thai-cyber-shield.example">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Anuphan:wght@500;600;700&family=IBM+Plex+Sans+Thai:wght@400;500;600&display=swap">
+  <link rel="stylesheet" href="/assets/app.css">
+  <script src="/assets/app.js" defer></script>
+</head>
+<body class="min-h-full bg-night text-ink font-body antialiased">
+  <noscript>
+    <p class="p-6 text-center text-caution">หน้านี้ต้องเปิด JavaScript เพื่อใช้งานการตรวจ</p>
+  </noscript>
+
+  <a href="#checker" class="skip-link">ข้ามไปที่ช่องตรวจ</a>
+
+  <div class="sky" aria-hidden="true"></div>
+
+  <header class="relative z-10 mx-auto flex max-w-5xl items-center justify-between px-5 pt-6 sm:px-8">
+    <div class="flex items-center gap-3">
+      <svg class="h-9 w-9 text-signal" viewBox="0 0 32 32" fill="none" aria-hidden="true">
+        <path d="M16 2.5 4.5 7v8.2c0 7 4.9 12.3 11.5 14.3 6.6-2 11.5-7.3 11.5-14.3V7L16 2.5Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+        <path d="m11 16 3.6 3.6L21.5 12" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <span class="font-display text-lg font-semibold tracking-tight">Thai Cyber Shield</span>
+    </div>
+    <a class="hotline-chip" href="tel:1441">
+      <span class="sr-only">โทรแจ้งเหตุ</span>
+      สายด่วน 1441
+    </a>
+  </header>
+
+  <main id="checker" class="relative z-10 mx-auto max-w-5xl px-5 pb-16 pt-10 sm:px-8 sm:pt-14">
+    <section class="max-w-2xl">
+      <h1 class="font-display text-[2.1rem] font-bold leading-[1.15] tracking-tight sm:text-5xl">
+        ได้ข้อความแปลก ๆ มา?<br>ตรวจก่อนกด
+      </h1>
+      <p class="mt-4 max-w-xl text-base leading-relaxed text-muted sm:text-lg">
+        วาง SMS ลิงก์ หรือเบอร์โทรที่สงสัย ระบบจะบอกว่าเสี่ยงแค่ไหนและเพราะอะไร
+        เราไม่เก็บข้อความของคุณ
+      </p>
+    </section>
+
+    <div class="mt-10 grid gap-6 lg:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)]">
+
+      <!-- ============ Input panel ============ -->
+      <section class="glass p-5 sm:p-7" aria-labelledby="input-title">
+        <h2 id="input-title" class="sr-only">สิ่งที่ต้องการตรวจ</h2>
+
+        <div class="segmented" role="tablist" aria-label="ประเภทที่ต้องการตรวจ">
+          <button type="button" role="tab" id="tab-sms" aria-controls="checker-form" aria-selected="true" data-mode="sms" class="segment">ข้อความ SMS</button>
+          <button type="button" role="tab" id="tab-url" aria-controls="checker-form" aria-selected="false" tabindex="-1" data-mode="url" class="segment">ลิงก์</button>
+          <button type="button" role="tab" id="tab-phone" aria-controls="checker-form" aria-selected="false" tabindex="-1" data-mode="phone" class="segment">เบอร์โทร</button>
+        </div>
+
+        <form id="checker-form" class="mt-6" role="tabpanel" aria-labelledby="tab-sms" novalidate autocomplete="off">
+          <label id="field-label" for="field-text" class="block font-display text-base font-semibold">ข้อความที่ได้รับ</label>
+          <p id="field-hint" class="mt-1 text-sm text-muted">คัดลอกข้อความทั้งหมดมาวาง รวมลิงก์และเบอร์โทรในข้อความด้วย</p>
+
+          <textarea id="field-text" name="text" rows="6" maxlength="1000"
+            class="field mt-3" spellcheck="false" autocapitalize="off" autocorrect="off"
+            aria-describedby="field-hint field-error field-count" required></textarea>
+
+          <div class="mt-2 flex items-start justify-between gap-4 text-sm">
+            <p id="field-error" class="min-h-[1.25rem] text-danger" role="alert"></p>
+            <p id="field-count" class="shrink-0 tabular-nums text-muted" aria-live="off">0 / 1000</p>
+          </div>
+
+          <div class="mt-4 flex flex-wrap items-center gap-3">
+            <button id="submit-btn" type="submit" class="btn-primary">
+              <span class="btn-label">ตรวจเลย</span>
+              <span class="spinner" aria-hidden="true"></span>
+            </button>
+            <button id="sample-btn" type="button" class="btn-ghost">ลองกับตัวอย่าง</button>
+            <button id="clear-btn" type="button" class="btn-ghost">ล้าง</button>
+          </div>
+        </form>
+      </section>
+
+      <!-- ============ Result panel ============ -->
+      <section id="result" class="glass result p-5 sm:p-7" data-level="IDLE" aria-labelledby="result-title" aria-live="polite" aria-busy="false">
+        <h2 id="result-title" class="sr-only">ผลการตรวจ</h2>
+
+        <div class="flex items-center gap-6">
+          <div class="gauge" aria-hidden="true">
+            <svg viewBox="0 0 120 120">
+              <circle class="gauge-track" cx="60" cy="60" r="52"/>
+              <circle id="gauge-arc" class="gauge-arc" cx="60" cy="60" r="52"
+                      stroke-dasharray="326.73" stroke-dashoffset="326.73"
+                      transform="rotate(-90 60 60)"/>
+            </svg>
+            <span id="gauge-score" class="gauge-score">—</span>
+          </div>
+          <div class="min-w-0">
+            <p id="result-level" class="font-display text-2xl font-bold leading-tight">ยังไม่ได้ตรวจ</p>
+            <p id="result-summary" class="mt-1 text-sm leading-relaxed text-muted">ผลจะแสดงที่นี่ พร้อมเหตุผลและสิ่งที่ควรทำต่อ</p>
+          </div>
+        </div>
+
+        <p id="result-host" class="host-line mt-5 hidden"></p>
+
+        <div id="reasons-wrap" class="mt-6 hidden">
+          <h3 class="font-display text-base font-semibold">เหตุผลที่ระบบพบ</h3>
+          <ul id="reasons" class="reasons mt-3"></ul>
+        </div>
+
+        <div id="advice" class="advice mt-6 hidden">
+          <h3 class="font-display text-base font-semibold">ควรทำอย่างไรต่อ</h3>
+          <ul id="advice-list" class="mt-2 space-y-1.5 text-sm leading-relaxed"></ul>
+        </div>
+
+        <div id="error-box" class="error-box mt-6 hidden" role="alert">
+          <p id="error-text" class="text-sm leading-relaxed"></p>
+          <button id="retry-btn" type="button" class="btn-ghost mt-3">ลองอีกครั้ง</button>
+        </div>
+      </section>
+    </div>
+
+    <section class="mt-14 grid gap-6 text-sm leading-relaxed text-muted sm:grid-cols-3" aria-label="ข้อควรรู้">
+      <div>
+        <h2 class="font-display text-base font-semibold text-ink">หน่วยงานจริงไม่ส่งลิงก์ให้กรอกข้อมูล</h2>
+        <p class="mt-2">ธนาคาร สรรพากร การไฟฟ้า และตำรวจ ไม่ขอรหัส OTP หรือให้โอนเงินไป “บัญชีปลอดภัย” ผ่าน SMS หรือ LINE</p>
+      </div>
+      <div>
+        <h2 class="font-display text-base font-semibold text-ink">เบอร์ที่ขึ้นต้น +697 หรือ +698</h2>
+        <p class="mt-2">เป็นรหัสประเทศที่ไม่มีอยู่จริง มักเป็นสายจากแก๊งคอลเซ็นเตอร์ที่ปลอมเบอร์ ไม่ควรรับหรือโทรกลับ</p>
+      </div>
+      <div>
+        <h2 class="font-display text-base font-semibold text-ink">ถ้าเผลอโอนเงินไปแล้ว</h2>
+        <p class="mt-2">โทร 1441 (ศูนย์ AOC) หรือธนาคารของคุณทันทีเพื่อขออายัดบัญชีปลายทาง ยิ่งเร็วยิ่งมีโอกาสได้เงินคืน</p>
+      </div>
+    </section>
+  </main>
+
+  <footer class="relative z-10 mx-auto max-w-5xl px-5 pb-10 text-xs text-muted sm:px-8">
+    ผลการตรวจเป็นการประเมินด้วยกฎตรวจจับ ไม่ใช่การรับรอง หากไม่แน่ใจ ให้ติดต่อหน่วยงานผ่านช่องทางทางการโดยตรง
+  </footer>
+</body>
+</html>

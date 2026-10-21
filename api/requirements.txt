@@ -1,0 +1,9 @@
+# Pin exact versions and install with hashes in CI:
+#   pip-compile --generate-hashes requirements.in && pip install --require-hashes -r requirements.txt
+fastapi==0.115.12
+starlette==0.46.2
+pydantic==2.11.4
+uvicorn[standard]==0.34.2
+# tests
+pytest==8.3.5
+httpx==0.28.1

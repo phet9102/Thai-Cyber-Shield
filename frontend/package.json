@@ -1,0 +1,13 @@
+{
+  "name": "thai-cyber-shield-frontend",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Thai Cyber Shield - static secure frontend (Vercel)",
+  "scripts": {
+    "build": "tailwindcss -i ./src/input.css -o ./public/assets/app.css --minify",
+    "dev": "tailwindcss -i ./src/input.css -o ./public/assets/app.css --watch"
+  },
+  "devDependencies": {
+    "tailwindcss": "3.4.17"
+  }
+}

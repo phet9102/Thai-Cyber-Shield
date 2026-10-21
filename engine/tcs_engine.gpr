@@ -1,0 +1,55 @@
+--  Thai Cyber Shield - Secure Core Engine build project
+--  Build : gprbuild -P tcs_engine.gpr -XBUILD=release
+--  Prove : gnatprove -P tcs_engine.gpr --level=2 --mode=all
+
+project TCS_Engine is
+
+   type Build_Kind is ("release", "debug");
+   Build : Build_Kind := external ("BUILD", "release");
+
+   for Languages   use ("Ada");
+   for Source_Dirs use ("src");
+   for Object_Dir  use "obj/" & Build;
+   for Exec_Dir    use "bin";
+   for Main        use ("tcs_main.adb");
+
+   package Builder is
+      for Executable ("tcs_main.adb") use "tcs_engine";
+   end Builder;
+
+   Common_Switches :=
+     ("-gnat2012",
+      "-gnatW8",          --  UTF-8 source (Thai keyword literals)
+      "-gnatwa",          --  all warnings
+      "-gnatVA",          --  all validity checks (uninitialised / invalid data)
+      "-gnato",           --  integer overflow checks
+      "-gnata",           --  Pre/Post/Loop_Invariant checked at run time too
+      "-gnatf",           --  full error messages
+      "-fstack-check",    --  stack exhaustion -> Storage_Error, not SIGSEGV
+      "-fstack-protector-strong",
+      "-fPIE");
+
+   package Compiler is
+      case Build is
+         when "release" =>
+            for Default_Switches ("Ada") use Common_Switches & ("-O2");
+         when "debug" =>
+            for Default_Switches ("Ada") use Common_Switches & ("-O0", "-g");
+      end case;
+   end Compiler;
+
+   package Binder is
+      for Default_Switches ("Ada") use ("-Es");   --  symbolic tracebacks
+   end Binder;
+
+   package Linker is
+      --  Full RELRO, non-executable stack, position independent executable
+      for Default_Switches ("Ada") use
+        ("-pie", "-Wl,-z,relro", "-Wl,-z,now", "-Wl,-z,noexecstack");
+   end Linker;
+
+   package Prove is
+      for Proof_Switches ("Ada") use ("--level=2", "--mode=all", "--report=statistics");
+   end Prove;
+
+end TCS_Engine;
