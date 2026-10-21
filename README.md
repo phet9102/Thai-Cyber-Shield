@@ -1,5 +1,5 @@
-# Thai Cyber Shield v2
-Made by PhetZY(Kanokchan Puteenpha)
+# Thai Cyber Shield (Made by PhetZY(Kanokchan Puteenpha))
+
 ระบบตรวจแชทซื้อขาย สลิปโอนเงิน ลิงก์ Facebook อีเมล เบอร์โทร และ SMS ที่น่าสงสัยสำหรับคนไทย
 
 | ส่วน | เทคโนโลยี | โฟลเดอร์ |
