@@ -13,11 +13,13 @@ blindly trusting the header.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
+import re
 from contextlib import asynccontextmanager
-from typing import AsyncIterator
+from typing import AsyncIterator, List, Optional
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -25,9 +27,28 @@ from starlette.middleware.cors import CORSMiddleware
 
 from .config import load_settings
 from .engine import EngineRejectedInput, EngineUnavailable, SecureEngineRunner
-from .models import AnalysisResponse, ErrorResponse, PhoneRequest, SmsRequest, UrlRequest
+from .extract import Identifier, extract_identifiers, identifier_from_field
+from .fusion import fuse
+from .models import (
+    AnalysisResponse,
+    EmailRequest,
+    EngineResult,
+    ErrorResponse,
+    IdentifierOut,
+    PhoneRequest,
+    ReportRequest,
+    ReportResponse,
+    SlipOut,
+    SmsRequest,
+    SocialRequest,
+    TradeRequest,
+    UrlRequest,
+)
 from .ratelimit import RateLimiter
 from .sanitize import attack_signatures, fingerprint
+from .slipparse import build_fact_sheet, extract_slip, parse_slip_qr
+from .store import ReportStore, Reputation, StoreError
+from .vision import ImageRejected, OcrRunner, OcrUnavailable, analyse_image, numeric_inconsistency
 from .security import (
     BodyLimitMiddleware,
     ContentTypeMiddleware,
@@ -52,13 +73,23 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Binary verification happens here: the service refuses to start with a
     # missing, writable or tampered engine (fail closed).
     app.state.runner = SecureEngineRunner(settings)
+    app.state.ocr = OcrRunner(settings)
+    # The report store is optional: if the database is unreachable the
+    # analysers keep working and reputation lookups are skipped.
+    try:
+        store = ReportStore(settings)
+        await asyncio.to_thread(store.init_schema)
+        app.state.store = store
+    except Exception:
+        log.exception("report store unavailable - continuing without reputation data")
+        app.state.store = None
     log.info("engine verified, env=%s", settings.env)
     yield
 
 
 app = FastAPI(
     title="Thai Cyber Shield API",
-    version="1.0.0",
+    version="2.0.0",
     lifespan=lifespan,
     docs_url=None if settings.is_production else "/docs",
     redoc_url=None,
@@ -74,7 +105,7 @@ app.add_middleware(
     allow_origins=list(settings.allowed_origins),   # explicit list, never "*"
     allow_credentials=False,                        # no cookies -> no CSRF surface
     allow_methods=["GET", "POST"],
-    allow_headers=["Content-Type", "X-Request-ID"],
+    allow_headers=["Content-Type", "X-Request-ID", "X-TCS-Client"],
     expose_headers=["X-Request-ID", "Retry-After"],
     max_age=600,
 )
@@ -132,52 +163,229 @@ async def on_unhandled(request: Request, exc: Exception) -> JSONResponse:
 # ---------------------------------------------------------------------------
 # Core
 # ---------------------------------------------------------------------------
-async def _analyze(mode: str, text: str, request: Request) -> JSONResponse:
-    runner: SecureEngineRunner = request.app.state.runner
-    rid = _rid(request)
+_EXPECTED_RE = re.compile(r"^[0-9]{1,11}(\.[0-9]{1,2})?$")
 
+
+def _client_key(request: Request) -> str:
+    return str(request.scope.get("state", {}).get("client_key", "unknown"))
+
+
+async def _reputations(request: Request, idents: List[Identifier]) -> List[tuple]:
+    store: Optional[ReportStore] = request.app.state.store
+    if store is None or not idents:
+        return [(i, Reputation(0, 0, 0)) for i in idents]
+    try:
+        reps = await asyncio.to_thread(store.reputation, idents)
+    except Exception:
+        log.exception("reputation lookup failed rid=%s", _rid(request))
+        reps = {}
+    return [(i, reps.get(i.kind + "|" + i.key, Reputation(0, 0, 0))) for i in idents]
+
+
+async def _engine(request: Request, mode: str, text: str) -> EngineResult:
+    runner: SecureEngineRunner = request.app.state.runner
     sigs = attack_signatures(text)
     if sigs:
         # Telemetry only (fingerprint, never raw content - PDPA/log injection)
         log.warning("attack_signature rid=%s mode=%s sigs=%s fp=%s",
-                    rid, mode, ",".join(sigs), fingerprint(text))
+                    _rid(request), mode, ",".join(sigs), fingerprint(text))
+    return await runner.analyze(mode, text)
 
-    try:
-        result = await runner.analyze(mode, text)
-    except EngineRejectedInput as exc:
-        return _error(422, exc.code, request)
-    except EngineUnavailable as exc:
-        log.error("engine unavailable rid=%s code=%s", rid, exc.code)
-        return _error(503, "SERVICE_UNAVAILABLE", request, {"Retry-After": "5"})
 
-    log.info("analysis rid=%s mode=%s score=%d level=%s fp=%s len=%d",
-             rid, mode, result.score, result.level, fingerprint(text), len(text))
-
+async def _respond(request: Request, result: EngineResult, idents: List[Identifier],
+                   *, slip: Optional[SlipOut] = None, ocr_text: Optional[str] = None,
+                   ocr_conf: Optional[int] = None) -> JSONResponse:
+    pairs = await _reputations(request, idents)
+    score, level, findings = fuse(result.score, list(result.findings), pairs)
+    log.info("analysis rid=%s mode=%s score=%d level=%s ids=%d",
+             _rid(request), result.mode, score, level, len(idents))
     response = AnalysisResponse(
-        request_id=rid,
+        request_id=_rid(request),
         mode=result.mode,
-        score=result.score,
-        level=result.level,
-        findings=list(result.findings),
+        score=score,
+        level=level,
+        findings=findings,
         host=result.host,
         engine=result.engine,
+        identifiers=[
+            IdentifierOut(kind=i.kind, display=i.display, reporters=r.reporters,
+                          reports=r.reports, linked_reports=r.linked_reports)
+            for i, r in pairs
+        ],
+        slip=slip,
+        ocr_text=ocr_text,
+        ocr_conf=ocr_conf,
     )
     return JSONResponse(status_code=200, content=response.model_dump())
 
 
+async def _analyze(request: Request, mode: str, text: str,
+                   idents: List[Identifier]) -> JSONResponse:
+    try:
+        result = await _engine(request, mode, text)
+    except EngineRejectedInput as exc:
+        return _error(422, exc.code, request)
+    except EngineUnavailable as exc:
+        log.error("engine unavailable rid=%s code=%s", _rid(request), exc.code)
+        return _error(503, "SERVICE_UNAVAILABLE", request, {"Retry-After": "5"})
+    return await _respond(request, result, idents)
+
+
+def _one(kind: str, value: str) -> List[Identifier]:
+    ident = identifier_from_field(kind, value)
+    return [ident] if ident else []
+
+
+# --- text analysers ---------------------------------------------------------
 @app.post("/api/v1/analyze/sms", response_model=AnalysisResponse)
 async def analyze_sms(body: SmsRequest, request: Request) -> JSONResponse:
-    return await _analyze("sms", body.message, request)
+    return await _analyze(request, "sms", body.message, extract_identifiers(body.message))
 
 
 @app.post("/api/v1/analyze/url", response_model=AnalysisResponse)
 async def analyze_url(body: UrlRequest, request: Request) -> JSONResponse:
-    return await _analyze("url", body.url, request)
+    return await _analyze(request, "url", body.url, _one("facebook", body.url) or _one("url", body.url))
 
 
 @app.post("/api/v1/analyze/phone", response_model=AnalysisResponse)
 async def analyze_phone(body: PhoneRequest, request: Request) -> JSONResponse:
-    return await _analyze("phone", body.phone, request)
+    return await _analyze(request, "phone", body.phone, _one("phone", body.phone))
+
+
+@app.post("/api/v1/analyze/trade", response_model=AnalysisResponse)
+async def analyze_trade(body: TradeRequest, request: Request) -> JSONResponse:
+    return await _analyze(request, "trade", body.chat, extract_identifiers(body.chat))
+
+
+@app.post("/api/v1/analyze/social", response_model=AnalysisResponse)
+async def analyze_social(body: SocialRequest, request: Request) -> JSONResponse:
+    return await _analyze(request, "social", body.url, _one("facebook", body.url) or _one("url", body.url))
+
+
+@app.post("/api/v1/analyze/email", response_model=AnalysisResponse)
+async def analyze_email(body: EmailRequest, request: Request) -> JSONResponse:
+    return await _analyze(request, "email", body.email, _one("email", body.email))
+
+
+# --- image analysers ----------------------------------------------------------
+async def _read_upload(file: UploadFile) -> bytes:
+    data = await file.read(settings.max_upload_bytes + 1)
+    await file.close()
+    if len(data) > settings.max_upload_bytes:
+        raise ImageRejected("IMAGE_TOO_LARGE")
+    return data
+
+
+def _vision_error(request: Request, exc: Exception) -> JSONResponse:
+    if isinstance(exc, ImageRejected):
+        return _error(422, str(exc), request)
+    log.error("ocr unavailable rid=%s code=%s", _rid(request), exc)
+    return _error(503, "SERVICE_UNAVAILABLE", request, {"Retry-After": "10"})
+
+
+@app.post("/api/v1/analyze/chat-image", response_model=AnalysisResponse)
+async def analyze_chat_image(request: Request, file: UploadFile = File(...)) -> JSONResponse:
+    try:
+        data = await _read_upload(file)
+        vis = await analyse_image(data, settings, request.app.state.ocr)
+    except (ImageRejected, OcrUnavailable) as exc:
+        return _vision_error(request, exc)
+
+    text = vis.text.strip()
+    if len(text) < 3:
+        return _error(422, "NO_TEXT_FOUND", request)
+    chat = text[:4000]
+    try:
+        result = await _engine(request, "trade", chat)
+    except EngineRejectedInput as exc:
+        return _error(422, exc.code, request)
+    except EngineUnavailable:
+        return _error(503, "SERVICE_UNAVAILABLE", request, {"Retry-After": "5"})
+    return await _respond(request, result, extract_identifiers(chat),
+                          ocr_text=chat[:3000], ocr_conf=vis.mean_conf)
+
+
+@app.post("/api/v1/analyze/slip", response_model=AnalysisResponse)
+async def analyze_slip(request: Request, file: UploadFile = File(...),
+                       expected_amount: Optional[str] = Form(default=None, max_length=20)) -> JSONResponse:
+    expected = None
+    if expected_amount and expected_amount.strip():
+        expected = expected_amount.strip().replace(",", "")
+        if not _EXPECTED_RE.fullmatch(expected):
+            return _error(422, "INVALID_EXPECTED_AMOUNT", request)
+    try:
+        data = await _read_upload(file)
+        vis = await analyse_image(data, settings, request.app.state.ocr)
+    except (ImageRejected, OcrUnavailable) as exc:
+        return _vision_error(request, exc)
+
+    facts = extract_slip(vis.text, vis.qr_payloads)
+
+    duplicate = False
+    store: Optional[ReportStore] = request.app.state.store
+    if store is not None and facts.ref:
+        try:
+            duplicate = await asyncio.to_thread(store.slip_seen_elsewhere, facts.ref,
+                                                _client_key(request))
+        except Exception:
+            log.exception("slip duplicate check failed rid=%s", _rid(request))
+
+    sheet = build_fact_sheet(
+        facts, expected=expected, edited=bool(vis.edited_by),
+        inconsistent=numeric_inconsistency(vis.words, facts.amount_raw),
+        duplicate=duplicate, ocr_conf=vis.mean_conf)
+    try:
+        result = await _engine(request, "slip", sheet)
+    except EngineRejectedInput as exc:
+        return _error(422, exc.code, request)
+    except EngineUnavailable:
+        return _error(503, "SERVICE_UNAVAILABLE", request, {"Retry-After": "5"})
+
+    qr_info = parse_slip_qr(facts.qr) if facts.qr else None
+    slip = SlipOut(
+        bank=facts.bank,
+        amount=facts.amount,
+        time=facts.when.strftime("%d/%m/%Y %H:%M") if facts.when else None,
+        ref_tail=facts.ref[-4:] if facts.ref else None,
+        qr_found=bool(facts.qr),
+        qr_valid=(bool(qr_info and qr_info["crc_ok"]) if facts.qr else None),
+    )
+    return await _respond(request, result, extract_identifiers(vis.text), slip=slip,
+                          ocr_text=vis.text[:3000], ocr_conf=vis.mean_conf)
+
+
+# --- community reports ----------------------------------------------------------
+@app.post("/api/v1/reports", response_model=ReportResponse)
+async def submit_report(body: ReportRequest, request: Request) -> JSONResponse:
+    store: Optional[ReportStore] = request.app.state.store
+    if store is None:
+        return _error(503, "SERVICE_UNAVAILABLE", request, {"Retry-After": "30"})
+
+    idents: List[Identifier] = []
+    for kind in ("phone", "bank_account", "facebook", "email", "url"):
+        value = getattr(body, kind)
+        if value:
+            ident = identifier_from_field(kind, value)
+            if ident is None and kind == "url":
+                continue
+            if ident is None:
+                return _error(422, f"INVALID_{kind.upper()}", request)
+            idents.append(ident)
+    if not idents:
+        return _error(422, "NO_IDENTIFIER", request)
+
+    try:
+        await asyncio.to_thread(store.add_report, _client_key(request), body.category, idents)
+    except StoreError as exc:
+        status = {"REPORT_LIMIT_REACHED": 429, "ALREADY_REPORTED": 409}.get(str(exc), 422)
+        return _error(status, str(exc), request)
+    except Exception:
+        log.exception("report store write failed rid=%s", _rid(request))
+        return _error(503, "SERVICE_UNAVAILABLE", request, {"Retry-After": "30"})
+
+    log.info("report accepted rid=%s category=%s ids=%d", _rid(request), body.category, len(idents))
+    return JSONResponse(status_code=201, content=ReportResponse(
+        request_id=_rid(request), accepted=True, identifiers=len(idents)).model_dump())
 
 
 @app.get("/api/health")

@@ -82,10 +82,29 @@ class Settings:
     ban_window_s: int
     ban_seconds: int
     max_tracked_clients: int
+    # --- vision / OCR -----------------------------------------------------
+    max_upload_bytes: int
+    max_image_pixels: int
+    tesseract_path: str
+    ocr_langs: str
+    ocr_timeout_s: float
+    ocr_max_concurrency: int
+    # --- report store / OSINT correlation ----------------------------------
+    hash_pepper: bytes
+    database_url: str
+    report_daily_limit: int
+    report_retention_days: int
 
     @property
     def is_production(self) -> bool:
         return self.env == "production"
+
+
+def _ocr_langs() -> str:
+    langs = os.getenv("TCS_OCR_LANGS", "tha+eng").strip()
+    if not langs or any(c not in "abcdefghijklmnopqrstuvwxyz_+" for c in langs) or len(langs) > 40:
+        raise ConfigError("TCS_OCR_LANGS must look like 'tha+eng'")
+    return langs
 
 
 def load_settings() -> Settings:
@@ -121,6 +140,24 @@ def load_settings() -> Settings:
     elif env == "production":
         raise ConfigError("TCS_ENGINE_SHA256 is mandatory in production (binary pinning)")
 
+    pepper = os.getenv("TCS_HASH_PEPPER", "")
+    if len(pepper) < 32:
+        if env == "production":
+            raise ConfigError(
+                "TCS_HASH_PEPPER must be set to a random secret of >= 32 characters"
+            )
+        pepper = "development-only-pepper-do-not-use-in-production"
+
+    database_url = os.getenv("TCS_DATABASE_URL", "").strip()
+    if database_url and not (
+        database_url.startswith("postgresql://") or database_url.startswith("postgres://")
+        or database_url.startswith("sqlite:///")
+    ):
+        raise ConfigError("TCS_DATABASE_URL must be postgresql://... or sqlite:///...")
+    if database_url.startswith("postgres") and env == "production" \
+            and "sslmode=require" not in database_url and "sslmode=verify" not in database_url:
+        raise ConfigError("Production Postgres URL must use sslmode=require (or verify-full)")
+
     return Settings(
         env=env,
         engine_path=os.getenv("TCS_ENGINE_PATH", "/opt/tcs/bin/tcs_engine"),
@@ -132,7 +169,7 @@ def load_settings() -> Settings:
         allowed_origins=origins,
         allowed_hosts=hosts,
         trusted_proxies=tuple(proxies),
-        max_body_bytes=_env_int("TCS_MAX_BODY_BYTES", 16_384, 1_024, 1_048_576),
+        max_body_bytes=_env_int("TCS_MAX_BODY_BYTES", 65_536, 1_024, 1_048_576),
         body_read_timeout_s=_env_float("TCS_BODY_READ_TIMEOUT_S", 10.0, 1.0, 60.0),
         ip_rate_per_s=_env_float("TCS_IP_RATE_PER_S", 0.5, 0.01, 100.0),   # 30 req/min
         ip_burst=_env_int("TCS_IP_BURST", 10, 1, 1_000),
@@ -142,4 +179,14 @@ def load_settings() -> Settings:
         ban_window_s=_env_int("TCS_BAN_WINDOW_S", 60, 1, 3_600),
         ban_seconds=_env_int("TCS_BAN_SECONDS", 900, 1, 86_400),
         max_tracked_clients=_env_int("TCS_MAX_TRACKED_CLIENTS", 100_000, 1_000, 10_000_000),
+        max_upload_bytes=_env_int("TCS_MAX_UPLOAD_BYTES", 5 * 1024 * 1024, 64 * 1024, 20 * 1024 * 1024),
+        max_image_pixels=_env_int("TCS_MAX_IMAGE_PIXELS", 24_000_000, 1_000_000, 80_000_000),
+        tesseract_path=os.getenv("TCS_TESSERACT_PATH", "/usr/bin/tesseract"),
+        ocr_langs=_ocr_langs(),
+        ocr_timeout_s=_env_float("TCS_OCR_TIMEOUT_S", 25.0, 2.0, 120.0),
+        ocr_max_concurrency=_env_int("TCS_OCR_MAX_CONCURRENCY", 1, 1, 16),
+        hash_pepper=pepper.encode("utf-8"),
+        database_url=database_url or "sqlite:////tmp/tcs_reports.db",
+        report_daily_limit=_env_int("TCS_REPORT_DAILY_LIMIT", 5, 1, 1_000),
+        report_retention_days=_env_int("TCS_REPORT_RETENTION_DAYS", 730, 30, 3_650),
     )

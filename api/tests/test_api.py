@@ -19,7 +19,11 @@ os.environ.update(
     TCS_ALLOWED_HOSTS="testserver",
     TCS_IP_BURST="1000",
     TCS_ENGINE_TIMEOUT_S="1.0",
+    TCS_DATABASE_URL="sqlite:///" + str(HERE / "test_reports.db"),
+    TCS_OCR_LANGS="eng",
 )
+for _p in HERE.glob("test_reports.db*"):
+    _p.unlink()
 sys.path.insert(0, str(HERE.parent))
 
 from fastapi.testclient import TestClient  # noqa: E402
@@ -139,3 +143,64 @@ def test_xff_right_to_left_with_trusted_proxy():
     trusted = (ipaddress.ip_network("10.0.0.0/8"),)
     # attacker prepends a fake hop; real client is the right-most untrusted
     assert client_key("10.0.0.5", ["6.6.6.6, 198.51.100.7, 10.0.0.9"], trusted) == "198.51.100.7"
+
+
+# ---------------------------------------------------------------------------
+# v2: trade, reports, uploads
+# ---------------------------------------------------------------------------
+def test_trade_and_report_correlation(client):
+    chat = "โอนก่อนนะ ไม่รับกลาง โทร 081-234-5678"
+    r = client.post("/api/v1/analyze/trade", json={"chat": chat})
+    assert r.status_code == 200
+    assert any(i["kind"] == "phone" for i in r.json()["identifiers"])
+
+    for ip in ("10.1.1.1", "10.1.1.2", "10.1.1.3"):
+        rep = client.post("/api/v1/reports",
+                          json={"category": "item_trade", "phone": "0812345678", "consent": True},
+                          headers={"X-Forwarded-For": ip})
+        assert rep.status_code in (201, 409)
+
+    r2 = client.post("/api/v1/analyze/trade", json={"chat": chat})
+    body = r2.json()
+    phone = [i for i in body["identifiers"] if i["kind"] == "phone"][0]
+    assert phone["display"].endswith("678") and "081" not in phone["display"]
+    assert phone["reporters"] >= 1
+
+
+def test_report_requires_consent(client):
+    r = client.post("/api/v1/reports", json={"category": "other", "phone": "0812345678"})
+    assert r.status_code == 422
+
+
+def test_report_rejects_unknown_category(client):
+    r = client.post("/api/v1/reports",
+                    json={"category": "revenge", "phone": "0812345678", "consent": True})
+    assert r.status_code == 422
+
+
+def _png() -> bytes:
+    import io
+    from PIL import Image, ImageDraw
+    img = Image.new("RGB", (600, 300), "white")
+    ImageDraw.Draw(img).text((20, 20), "Amount 1,500.00 THB", fill="black")
+    buf = io.BytesIO()
+    img.save(buf, "PNG")
+    return buf.getvalue()
+
+
+def test_upload_requires_custom_header(client):
+    r = client.post("/api/v1/analyze/slip", files={"file": ("s.png", _png(), "image/png")})
+    assert r.status_code == 415
+
+
+def test_upload_rejects_non_image(client):
+    r = client.post("/api/v1/analyze/slip", files={"file": ("s.png", b"<svg onload=alert(1)>", "image/png")},
+                    headers={"X-TCS-Client": "web"})
+    assert r.status_code == 422
+    assert "svg" not in r.text
+
+
+def test_upload_rejects_bad_expected_amount(client):
+    r = client.post("/api/v1/analyze/slip", files={"file": ("s.png", _png(), "image/png")},
+                    data={"expected_amount": "1;rm -rf /"}, headers={"X-TCS-Client": "web"})
+    assert r.status_code == 422

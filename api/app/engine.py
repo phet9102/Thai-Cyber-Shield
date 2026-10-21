@@ -40,8 +40,8 @@ from .models import EngineError, EngineResult
 
 log = logging.getLogger("tcs.engine")
 
-ALLOWED_MODES = frozenset({"sms", "url", "phone"})
-MAX_STDIN_BYTES = 8_192          # mirrors TCS_Types.Max_Raw_Bytes
+ALLOWED_MODES = frozenset({"sms", "url", "phone", "trade", "slip", "social", "email"})
+MAX_STDIN_BYTES = 16_384         # mirrors TCS_Types.Max_Raw_Bytes
 MAX_STDOUT_BYTES = 16_384        # engine emits one short JSON line
 _SAFE_ENV = {"LANG": "C.UTF-8", "LC_ALL": "C.UTF-8", "PATH": "/usr/bin:/bin"}
 

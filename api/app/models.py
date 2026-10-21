@@ -17,7 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .sanitize import SanitizationError, clean_phone, clean_text, clean_url
 
-Mode = Literal["sms", "url", "phone"]
+Mode = Literal["sms", "url", "phone", "trade", "slip", "social", "email"]
 Level = Literal["SAFE", "LOW", "MEDIUM", "HIGH", "CRITICAL"]
 
 FINDING_PATTERN = r"^[A-Z0-9_]{1,40}$"
@@ -69,6 +69,63 @@ class PhoneRequest(_StrictModel):
             raise ValueError(str(exc)) from None
 
 
+class TradeRequest(_StrictModel):
+    chat: str = Field(min_length=1, max_length=4000)
+
+    @field_validator("chat")
+    @classmethod
+    def _sanitize(cls, v: str) -> str:
+        try:
+            return clean_text(v, max_chars=4000, max_bytes=16000, allow_newlines=True)
+        except SanitizationError as exc:
+            raise ValueError(str(exc)) from None
+
+
+class SocialRequest(UrlRequest):
+    """A Facebook (or any) link; same sanitation as UrlRequest."""
+
+
+class EmailRequest(_StrictModel):
+    email: str = Field(min_length=3, max_length=254)
+
+    @field_validator("email")
+    @classmethod
+    def _sanitize(cls, v: str) -> str:
+        try:
+            v = clean_text(v, max_chars=254, max_bytes=1024, allow_newlines=False)
+        except SanitizationError as exc:
+            raise ValueError(str(exc)) from None
+        if " " in v or "<" in v or ">" in v or '"' in v:
+            raise ValueError("invalid e-mail")
+        return v
+
+
+ReportCategory = Literal[
+    "item_trade", "online_shopping", "call_center", "investment", "loan",
+    "romance", "job", "phishing", "fake_slip", "other",
+]
+
+
+class ReportRequest(_StrictModel):
+    category: ReportCategory
+    phone: Optional[str] = Field(default=None, max_length=32)
+    bank_account: Optional[str] = Field(default=None, max_length=32)
+    facebook: Optional[str] = Field(default=None, max_length=512)
+    email: Optional[str] = Field(default=None, max_length=254)
+    url: Optional[str] = Field(default=None, max_length=2048)
+    consent: Literal[True]
+
+    @field_validator("phone", "bank_account", "facebook", "email", "url")
+    @classmethod
+    def _sanitize(cls, v: Optional[str]) -> Optional[str]:
+        if v is None or not v.strip():
+            return None
+        try:
+            return clean_text(v, max_chars=2048, max_bytes=8192, allow_newlines=False)
+        except SanitizationError as exc:
+            raise ValueError(str(exc)) from None
+
+
 # ---------------------------------------------------------------------------
 # Engine output (untrusted until validated)
 # ---------------------------------------------------------------------------
@@ -78,7 +135,7 @@ class EngineResult(_StrictModel):
     mode: Mode
     score: int = Field(ge=0, le=100)
     level: Level
-    findings: List[str] = Field(max_length=24)
+    findings: List[str] = Field(max_length=32)
     host: Optional[str] = Field(default=None, pattern=HOST_PATTERN)
 
     @field_validator("findings")
@@ -100,6 +157,23 @@ class EngineError(_StrictModel):
 # ---------------------------------------------------------------------------
 # Responses
 # ---------------------------------------------------------------------------
+class IdentifierOut(_StrictModel):
+    kind: Literal["phone", "bank_account", "email", "facebook", "url"]
+    display: str
+    reporters: int = Field(ge=0)
+    reports: int = Field(ge=0)
+    linked_reports: int = Field(ge=0)
+
+
+class SlipOut(_StrictModel):
+    bank: str
+    amount: Optional[str] = None
+    time: Optional[str] = None
+    ref_tail: Optional[str] = None
+    qr_found: bool
+    qr_valid: Optional[bool] = None
+
+
 class AnalysisResponse(_StrictModel):
     request_id: str
     mode: Mode
@@ -108,6 +182,16 @@ class AnalysisResponse(_StrictModel):
     findings: List[str]
     host: Optional[str] = None
     engine: str
+    identifiers: List[IdentifierOut] = Field(default_factory=list)
+    slip: Optional[SlipOut] = None
+    ocr_text: Optional[str] = None
+    ocr_conf: Optional[int] = None
+
+
+class ReportResponse(_StrictModel):
+    request_id: str
+    accepted: bool
+    identifiers: int
 
 
 class ErrorResponse(_StrictModel):

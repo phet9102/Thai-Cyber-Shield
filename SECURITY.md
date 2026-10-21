@@ -1,95 +1,183 @@
-# Thai Cyber Shield — กลไกความปลอดภัย (Security Measures)
+# Thai Cyber Shield v2 — สถาปัตยกรรมและกลไกความปลอดภัย
 
-เอกสารนี้อธิบายว่าแต่ละชั้นป้องกันอะไร ด้วยกลไกใด และมีข้อจำกัดอะไรบ้าง
-หลักคิดของทั้งระบบคือ **Zero Trust**: ทุกชั้นไม่ไว้ใจข้อมูลที่ส่งมาจากชั้นอื่น แม้จะเป็นระบบของเราเอง
+เอกสารนี้อธิบาย 3 เรื่อง: SPARK Contracts ป้องกันอะไรและพิสูจน์อะไรได้, ระบบแกะรอย (OSINT correlation) ทำงานอย่างไรโดยไม่ละเมิดความเป็นส่วนตัว, และแต่ละชั้นกันแฮกเกอร์ด้วยวิธีไหน
+
+หลักคิดของทั้งระบบคือ **Zero Trust**: ทุกชั้นไม่ไว้ใจข้อมูลจากชั้นอื่น แม้จะเป็นระบบของเราเอง
 
 ```
-[ เบราว์เซอร์ ] --HTTPS/CORS--> [ FastAPI + Middleware ] --argv+stdin--> [ Ada/SPARK Engine ]
-  textContent เท่านั้น              ตรวจซ้ำทุกอย่าง                         ตรวจ UTF-8 ระดับไบต์
-  ตรวจผลตอบกลับซ้ำ                 ตรวจผลจาก Engine ซ้ำ                    ส่งออก JSON คำศัพท์ปิด
+ เบราว์เซอร์                     FastAPI (Python)                          Ada/SPARK Engine
+ ─────────────                  ───────────────────────────               ──────────────────
+ ข้อความ/ลิงก์/เบอร์ ──JSON──▶  ตรวจ Pydantic + sanitize ─argv+stdin──▶  sms url phone
+ รูปแชท/สลิป ──multipart──▶     Vision: ตรวจไบต์ → ถอดรูปปลอดภัย          trade slip social email
+                                → QR (zbar) → OCR (tesseract, sandbox)     (ตรวจซ้ำทุกค่า,
+                                → fact sheet key=value ──────────────────▶   คำนวณคะแนน)
+                                ◀──── JSON 1 บรรทัด (ตรวจ schema ซ้ำ) ────
+                                Report store: HMAC เท่านั้น ─▶ Postgres/SQLite
+                                Risk fusion (engine + จำนวนผู้แจ้ง)
+ ◀── JSON (ตรวจ schema ซ้ำ, แสดงด้วย textContent) ──
 ```
 
 ---
 
 ## 1. Secure Core Engine (Ada / SPARK)
 
-| ภัยคุกคาม | กลไกป้องกัน | ไฟล์ |
+### 1.1 สิ่งที่ SPARK Contracts รับประกัน
+
+โค้ดวิเคราะห์ทั้งหมดอยู่ใน `SPARK_Mode => On` ส่วนเดียวที่ไม่ใช่ SPARK คือ `tcs_main.adb` (อ่าน stdin) และ `tcs_output.adb` (เขียน stdout)
+
+| กลไก | ตัวอย่างในโค้ด | ป้องกันอะไร |
 |---|---|---|
-| Buffer overflow / out-of-bounds | ทุกบัฟเฟอร์เป็น array ขนาดตายตัว ดัชนีเป็น constrained subtype (`CP_Index`, `Raw_Index`) เขียนเกินขอบเขต = ถูกพิสูจน์ว่าเป็นไปไม่ได้ด้วย GNATprove หรือเกิด `Constraint_Error` (ไม่มีการเขียนทับหน่วยความจำเงียบ ๆ) | `tcs_types.ads` |
-| Memory leak / use-after-free | ไม่มี access type, ไม่มี `new`, ไม่ใช้ heap ในโค้ดวิเคราะห์ทั้งหมด (SPARK บังคับ) | ทุก `SPARK_Mode => On` |
-| Integer overflow | `Risk_Score` เป็น range 0..100, การบวกคะแนนแบบ saturating (`Natural(Score)+W ≤ 200`) และคอมไพล์ด้วย `-gnato` | `tcs_types.adb` |
-| Malformed / malicious UTF-8 | ตัวถอดรหัสแบบเข้มงวด: ปฏิเสธ overlong (`C0 AF`), surrogate, >U+10FFFF, ลำดับขาด, continuation byte หลงมา | `tcs_utf8.adb` |
-| NUL-byte truncation, terminal escape injection | ปฏิเสธ C0 controls (ยกเว้น TAB/LF/CR), DEL, C1 controls ตั้งแต่ชั้นถอดรหัส | `tcs_utf8.adb` |
-| Format string attack | Ada ไม่มี printf — ข้อมูลผู้ใช้ไม่เคยถูกตีความเป็น format; Engine **ไม่ echo input กลับ** ผลลัพธ์ประกอบจาก enum/ตัวเลขเท่านั้น รูปแบบ `%n %x` ถูกรายงานเป็น telemetry (`FORMAT_STRING`) | `tcs_output.adb`, `tcs_sms.adb` |
-| JSON injection ในผลลัพธ์ | host ถูกส่งออกเฉพาะเมื่อผ่าน allow-list `[a-z0-9.:-]` เท่านั้น | `tcs_output.adb` |
-| ReDoS / CPU exhaustion | ไม่ใช้ regex; ลูปทุกตัวมีขอบเขต `O(Len × KeywordLen)` และ Len ถูกจำกัด (SMS 1,000 / URL 2,048 / เบอร์ 32 code points) | `tcs_text.adb` |
-| Input ใหญ่เกิน | อ่าน stdin เป็นก้อน 1 KB ไม่เกิน 8,192 ไบต์ เกิน = **ปฏิเสธ** (ไม่ตัดทิ้งเงียบ ๆ) | `tcs_main.adb` |
-| Option / argument injection | argv มีได้ค่าเดียวจากเซตปิด `sms|url|phone`; ข้อมูลผู้ใช้มาทาง stdin เท่านั้น | `tcs_main.adb` |
-| Crash | โค้ดวิเคราะห์เป็น SPARK (พิสูจน์ absence of runtime errors ได้) + `exception when others` ชั้นนอกสุด + `-fstack-check` ทำให้ stack ล้นกลายเป็น `Storage_Error` ที่จับได้ → ทุกกรณีจบด้วย JSON 1 บรรทัดและ exit code ที่กำหนด (0/2/3/64) | `tcs_main.adb`, `.gpr` |
-| Binary hardening | PIE, Full RELRO (`-z relro -z now`), NX stack, stack protector | `tcs_engine.gpr` |
+| **Constrained subtypes** | `CP_Index range 1 .. 4_096`, `Val_Len range 0 .. 512`, `Risk_Score range 0 .. 100` | ดัชนีเกินขอบเขตเป็นไปไม่ได้: GNATprove พิสูจน์ล่วงหน้า หรือ runtime check หยุดก่อนเขียนทับหน่วยความจำ |
+| **Pre-conditions** | `TCS_Trade.Analyze ... Pre => Input.Len <= Max_Trade_CP` | ผู้เรียกต้องพิสูจน์ว่าส่ง input ขนาดถูกต้อง ไม่งั้น proof ไม่ผ่าน |
+| **Post-conditions** | `TCS_UTF8.Decode ... Post => (if Status /= Decode_Ok then Result.Len = 0)` | ถอดรหัสล้มเหลวจะไม่เหลือข้อมูลค้างครึ่ง ๆ กลาง ๆ |
+| | `TCS_Types.Add ... Post => R.Score >= R.Score'Old` | คะแนนความเสี่ยงไม่มีทางลดลงจากการเพิ่ม finding |
+| | `TCS_Social.Analyze_* ... Post => Host.Len <= 253` | host ที่ส่งออกมีขนาดตามมาตรฐาน DNS เสมอ |
+| **Loop invariants** | `pragma Loop_Invariant (Dst.Len < I)` ใน `Normal_View` | พิสูจน์ว่าบัฟเฟอร์ปลายทางไม่มีวันล้นในลูป |
+| **`Global => null`** | ทุก Analyze | ฟังก์ชันวิเคราะห์ไม่มี state ซ่อน ผลลัพธ์ขึ้นกับ input อย่างเดียว (deterministic) |
+| **ไม่มี access type / heap** | SPARK ห้ามโดยโครงสร้าง | ไม่มี memory leak, use-after-free หรือ double free |
+| **เลขคณิตที่ overflow ไม่ได้** | เงินเป็น `Satang range 0 .. 9_999_999_999_999`, CRC เป็น `mod 2**16`, เวลาเป็นนาที (< 54 ล้าน) | ไม่ใช้ floating point กับเงิน และไม่มี integer overflow |
 
-### ฟังก์ชันวิเคราะห์ 3 ตัว
+**ข้อควรรู้:** คำว่า "พิสูจน์ทางคณิตศาสตร์ 100%" จะเป็นจริงก็ต่อเมื่อรัน `gnatprove -P engine/tcs_engine.gpr --level=2` แล้ว**ผ่านครบทุก check** ให้ใช้ผล proof เป็นเกณฑ์ปล่อยใช้งานใน CI ระหว่างนี้ Engine คอมไพล์ด้วย `-gnata -gnato -gnatVa -fstack-check` ทำให้ contract ทุกข้อถูกตรวจตอนรันด้วย ถ้าข้อใดไม่จริงจะกลายเป็น exception ที่ถูกจับ ไม่ใช่การเขียนทับหน่วยความจำ
 
-1. **SMS Heuristic Parser** — จับคำไทย/อังกฤษ 11 หมวด (เร่งรีบ, ล่อเงิน, พนัน, สินเชื่อ, ลงทุน, อ้างหน่วยงาน, ธนาคาร, พัสดุ, ขอข้อมูล, ขอโอนเงิน, ช่องทางติดต่อ) บน *compact view* ที่ตัดช่องว่าง/จุด/ขีดออก และแปลงเลขไทย/ตัวอักษร fullwidth แล้ว จึงจับ “โ.อ.น เ-งิ-น” ได้ + ตรวจการแยกตัวอักษรเพื่อหลบ (`EVASION_SPACING`) + กฎผสม (อ้างหน่วยงาน+ลิงก์, เร่งรีบ+ลิงก์, ล่อ+ช่องทางติดต่อ) ซึ่งเป็นตัวทำนายที่แม่นที่สุด
-2. **Deep URL Analyzer** — parser เขียนเองแบบ single-pass แยก scheme / userinfo / host / port / path และตรวจ: `javascript:`/`data:`, หลอกด้วย `@`, IP/IP แบบฐาน 10-16-8, Punycode, Unicode/homoglyph (ละติน+ซีริลลิก/กรีก), จุดแบบจีน `。`, TLD เสี่ยง, ลิงก์ย่อ, ชื่อแบรนด์ไทยที่ไม่ใช่โดเมนทางการ (จับคู่ suffix แบบเข้มงวด: `evilscb.co.th` ≠ `scb.co.th`), เว็บราชการปลอม, `.apk`, open redirect, `\` trick, จุดท้ายโดเมน
-3. **Phone Pattern Matcher** — O(n) ไม่เกิน 32 ตัว: +693…+699 (รวม +697/+698) ซึ่งเป็นรหัสประเทศที่ไม่มีการจัดสรร, เบอร์ 69x ที่ไม่มี `+`, `+66 0…` (เลข 0 เกิน), ภูมิภาคเสี่ยง, เครือข่ายดาวเทียม +881/882/883, 1900, ความยาวไม่ตรงแผนเลขหมายไทย, ตัวเลขซ้ำผิดปกติ
+### 1.2 ไม่แครช (Fault tolerance)
 
-> **ข้อจำกัดที่ต้องรู้:** การรับประกัน “100% ไม่มีช่องโหว่หน่วยความจำ/ไม่แครช” จะเป็นจริงเชิงคณิตศาสตร์ก็ต่อเมื่อรัน `gnatprove -P tcs_engine.gpr --level=2` ผ่านครบทุก check — ให้ถือผล proof เป็นเกณฑ์ปล่อยใช้งานใน CI ส่วน heuristic เป็นการประเมินความเสี่ยง ไม่ใช่การรับรองว่าปลอดภัย
+- `tcs_main.adb` มีตัวจับ `exception when others` ชั้นนอกสุด และ `-fstack-check` ทำให้ stack ล้นกลายเป็น `Storage_Error` ที่จับได้
+- ไม่ว่าเกิดอะไร Engine จะจบด้วย JSON 1 บรรทัดและ exit code ที่กำหนดไว้เสมอ (0 วิเคราะห์สำเร็จ / 2 ปฏิเสธ input / 3 ข้อผิดพลาดภายใน / 64 ใช้งานผิด)
+- ฝั่ง API มี circuit breaker: ถ้า Engine ล้มติดกัน 5 ครั้ง จะตอบ 503 ทันทีเป็นเวลา 30 วินาที แทนการสร้าง process ค้าง
+
+### 1.3 ฟังก์ชันวิเคราะห์
+
+| Mode | แพ็กเกจ | สิ่งที่ตรวจ |
+|---|---|---|
+| `trade` | `TCS_Trade` | Fraud linguistic patterns ในแชทซื้อขาย 13 หมวด: โอนก่อน, ไม่รับกลาง, **คนกลางปลอม** ("กลางของผม", "แอดมินกลาง", "เว็บกลาง"), เร่งรีบ, ราคาดีเกินจริง, ขอรหัส/OTP/เปลี่ยนอีเมลผูก, ย้ายไปคุยนอกแพลตฟอร์ม, บัญชีคนอื่น, โอนเกินขอคืน, เรียกค่าธรรมเนียม, ซองอั่งเปา TrueMoney, อ้างสลิปไม่เข้า, ข่มขู่ + กฎผสม 3 ข้อ (เช่น โอนก่อน + ไม่รับกลาง) ใช้มุมมอง compact เดียวกับ SMS จึงจับ "ไ ม่ รั บ ก ล า ง" ได้ |
+| `slip` | `TCS_Slip` | (ดูข้อ 1.4) |
+| `social` | `TCS_Social.Analyze_Facebook` | วิเคราะห์ URL ทั่วไปทั้งหมดก่อน แล้วตรวจโครงสร้าง Facebook: โดเมน FB จริง (เทียบ suffix เข้มงวด), โปรไฟล์ ID ตัวเลข, ช่วง ID ของบัญชีใหม่ (สัญญาณอ่อน), ลิงก์ `/share/` และ `l.php` ที่ซ่อนปลายทาง, เว็บปลอมชื่อคล้าย Facebook/Meta และ path หลอกแบบ "เพจละเมิดลิขสิทธิ์ / checkpoint / ยืนยันบัญชี" |
+| `email` | `TCS_Social.Analyze_Email` | ไวยากรณ์อีเมล, ผู้ให้บริการฟรี, อีเมลทิ้งชั่วคราว, ชื่อธนาคารหรือหน่วยงานบนอีเมลฟรี (`kbank.support@gmail.com`), ส่วนโดเมนผ่านการวิเคราะห์ host เต็มรูปแบบ |
+| `phone` | `TCS_Phone` | +693 ถึง +699 (รวม +697/+698), เลข 69x ที่ไม่มี `+`, `+66 0…`, ภูมิภาคเสี่ยง, เครือข่ายดาวเทียม, 1900, ความยาวผิด O(n) ไม่เกิน 32 ตัว |
+| `sms`, `url` | `TCS_SMS`, `TCS_URL` | เหมือนเวอร์ชันแรก |
+
+### 1.4 ตัวตรวจสลิป (Multi-Bank & TrueMoney Slip Verifier)
+
+**สิ่งที่ Engine ตรวจเอง** (ไม่เชื่อค่าที่ Python ส่งมา):
+
+1. **QR ตรวจสอบสลิป (mini-QR)**: แยกโครงสร้าง TLV ทีละช่อง
+   - tag `00` ประกอบด้วย sub-tag `01` รหัสธนาคาร 3 หลัก และ `02` เลขที่รายการ
+   - tag `51` ต้องเป็น "TH"
+   - tag `91` คือ CRC และต้องอยู่ท้ายสุด
+   - Engine คำนวณ **CRC-16/CCITT-FALSE** เองแล้วเทียบ ถ้ามีคนพิมพ์ QR ใหม่หรือแก้ตัวอักษรเดียว CRC จะไม่ตรง
+2. **เทียบข้อมูลข้ามกัน**: รหัสธนาคารใน QR กับธนาคารที่อ่านได้จากสลิป และเลขที่รายการใน QR กับเลขที่พิมพ์บนสลิป เทียบแบบทนความผิดพลาดของ OCR (O↔0, I/L↔1)
+3. **เวลา**: แปลงปฏิทินอย่างถูกต้อง (รวมปีอธิกสุรทิน) แล้วจับวันที่เป็นไปไม่ได้, สลิปลงเวลาเป็นอนาคต และสลิปเก่าเกิน 3 วัน
+4. **ยอดเงิน**: คำนวณเป็นสตางค์ด้วยจำนวนเต็มเท่านั้น และเทียบกับยอดที่ผู้ใช้ตกลงไว้
+
+**ข้อเท็จจริงที่ Python ส่งมา** (Engine parse ซ้ำแบบเข้มงวด):
+- ร่องรอยโปรแกรมแต่งภาพใน metadata
+- ขนาดตัวเลขยอดเงินไม่สอดคล้องกับส่วนอื่น
+- เลขที่รายการนี้เคยถูก**คนอื่น**ส่งมาตรวจแล้ว (สลิปใช้ซ้ำ)
+- ค่าความมั่นใจของ OCR
+
+**ข้อจำกัดที่ต้องบอกผู้ใช้เสมอ:**
+- QR ที่ถูกต้องพิสูจน์ได้แค่ว่า**รูปแบบ**สลิปถูกต้อง ไม่ได้พิสูจน์ว่าเงินเข้าจริง คนที่ยืนยันได้จริงมีแค่ธนาคาร
+- หน้าเว็บจึงแนะนำทุกครั้งให้เปิดแอปธนาคารของตัวเองดูยอดก่อนส่งของ
+- รูปแบบ mini-QR และรายชื่อรหัสธนาคารควรทดสอบกับสลิปจริงของแต่ละธนาคารก่อนใช้งานจริง (ดู `api/app/slipparse.py` ซึ่งเป็น oracle สำหรับทดสอบ)
 
 ---
 
-## 2. Web API (Python / FastAPI)
+## 2. Intelligent Ingestion, OCR และ API (Python / FastAPI)
 
-| ภัยคุกคาม | กลไกป้องกัน | ไฟล์ |
+### 2.1 ท่อประมวลผลภาพ (`vision.py`)
+
+| ขั้น | กลไก | ป้องกันอะไร |
 |---|---|---|
-| DDoS / flood | Token bucket ต่อ client (ค่าเริ่ม 30 req/นาที, burst 10) + global bucket; ตรวจ **ก่อน** อ่าน body | `ratelimit.py`, `security.py` |
-| Brute-force ต่อเนื่อง | ระบบ strike: โดน 429 ครบ 20 ครั้งใน 60 วิ → แบน 15 นาที และเพิ่มเป็นสองเท่าทุกครั้ง (สูงสุด 24 ชม.) | `ratelimit.py` |
-| ปลอม IP ผ่าน X-Forwarded-For | เชื่อ XFF เฉพาะเมื่อ peer อยู่ใน `TCS_TRUSTED_PROXIES` และอ่านจาก **ขวาไปซ้าย**; uvicorn รันด้วย `--no-proxy-headers` | `ratelimit.py` |
-| หมุน IPv6 หลบ rate limit | รวม IPv6 เป็น /64 | `ratelimit.py` |
-| Memory exhaustion จากการสุ่ม IP | LRU จำกัด 100,000 client | `ratelimit.py` |
-| Body ใหญ่ / Slowloris | ตรวจ Content-Length + นับไบต์จริง (16 KB) + timeout ต่อ chunk 10 วิ; uvicorn จำกัด header/keep-alive/concurrency | `security.py`, Dockerfile |
-| CSRF / simple-request bypass | POST ต้องเป็น `application/json` เท่านั้น (415), CORS ไม่ส่ง credentials, ไม่มี cookie | `security.py`, `main.py` |
-| Host header attack | `TrustedHostMiddleware` | `main.py` |
-| Mass assignment / type confusion | Pydantic `extra="forbid"`, `strict=True` (เลข 12345 ไม่ถูกแปลงเป็น string) | `models.py` |
-| XSS | ไม่ HTML-escape input (จะทำลายหลักฐาน) แต่ **ไม่เคยตอบเป็น HTML**: JSON + `nosniff` + CSP `default-src 'none'; sandbox`; URL ที่มี `< > " \` { }` ถูกปฏิเสธ; ปิด handler 422 ค่าเริ่มของ FastAPI ที่ echo input กลับ | `sanitize.py`, `main.py` |
-| SQL injection | ไม่มีฐานข้อมูล; ถ้าเพิ่มในอนาคต ใช้ parameterized query เท่านั้น — signature เป็นแค่ telemetry | `sanitize.py` |
-| Command / shell injection | `create_subprocess_exec(*argv)` ไม่ผ่าน shell, mode จาก frozenset, ข้อมูลผ่าน stdin | `engine.py` |
-| Engine ถูกสับเปลี่ยน | ตรวจ path แบบ absolute, resolve symlink, ไฟล์ปกติ, ห้าม group/world-writable, **pin SHA-256** (บังคับใน production) | `engine.py`, `config.py` |
-| Engine ค้าง/โดนโจมตี | `prlimit` (CPU 2s, AS 128 MB, nofile 16, fsize 0, core 0), env ว่าง, cwd `/`, process group ของตัวเอง, timeout แล้ว `killpg SIGKILL`, อ่าน stdout ไม่เกิน 16 KB, semaphore จำกัด process พร้อมกัน, circuit breaker | `engine.py` |
-| ผลลัพธ์ Engine ผิดรูป | JSON parse แบบเข้ม (ห้าม key ซ้ำ/NaN, ต้อง 1 บรรทัด) แล้ว validate ด้วย Pydantic คำศัพท์ปิด | `engine.py`, `models.py` |
-| Log injection / ข้อมูลส่วนบุคคล (PDPA) | ไม่ log ข้อความดิบ ใช้ SHA-256 fingerprint; X-Request-ID รับเฉพาะ `[A-Za-z0-9-]{8,64}` | `sanitize.py` |
-| Information disclosure | ปิด `/docs` และ OpenAPI ใน production, ลบ `Server`, error ไม่มี stack trace, health check ไม่บอกเวอร์ชัน | `main.py`, `security.py` |
-| ตั้งค่าผิดแบบไม่ปลอดภัย | Fail-closed: CORS `*`, origin ไม่ใช่ https หรือไม่มี SHA-256 ใน production → ไม่ยอมเริ่มระบบ | `config.py` |
+| 1. ตรวจไบต์ | จำกัด 5 MB, ตรวจ magic bytes (PNG/JPEG/WebP) **ไม่เชื่อ** Content-Type หรือนามสกุลไฟล์ | ไฟล์ SVG/HTML/polyglot ปลอมเป็นรูป |
+| 2. ถอดรูปปลอดภัย | `MAX_IMAGE_PIXELS` + เปลี่ยน warning เป็น error, `verify()`, จำกัดขนาด 8000×8000, ใช้เฉพาะเฟรมแรก | Decompression bomb, ไฟล์ภาพที่จงใจทำให้เสีย |
+| 3. หลักฐานทางนิติวิทยาศาสตร์ | อ่าน EXIF/XMP/PNG text หาชื่อโปรแกรมแต่งภาพ (Photoshop, PicsArt, Canva ฯลฯ) | สลิปที่ผ่านการแต่ง |
+| 4. เข้ารหัสใหม่ | แปลงเป็น PNG ขาวดำใหม่ที่**ไม่มี metadata** ส่งให้ OCR เฉพาะพิกเซล | ช่องโหว่ใน parser ของ OCR ถูกโจมตีผ่านไฟล์ต้นฉบับ |
+| 5. QR | `pyzbar` อ่านจาก pixel buffer หลายขนาด | — |
+| 6. OCR | Tesseract (ไทย+อังกฤษ) เป็น process แยก: argv list, ส่งภาพทาง stdin, env ว่าง, `prlimit` (CPU 40 วิ, หน่วยความจำ 1.5 GB, ห้ามเขียนไฟล์, ห้าม core dump), timeout + kill ทั้ง process group, จำกัด output 512 KB, semaphore จำกัดงานพร้อมกัน | DoS ผ่านภาพหนัก, การหลุดออกจาก process |
+| 7. ความสอดคล้องของตัวเลข | สถิติความสูงและค่าความมั่นใจของคำที่เป็นตัวเลขจาก TSV | ยอดเงินที่ถูกวางทับด้วยฟอนต์อื่น (สัญญาณอ่อน น้ำหนักต่ำ) |
 
-**Security headers:** HSTS (2 ปี + preload), CSP, X-Frame-Options DENY, nosniff, Referrer-Policy no-referrer, Permissions-Policy, COOP/CORP/COEP, Cache-Control no-store
+ภาพที่อัปโหลดอยู่ในหน่วยความจำระหว่างประมวลผลแล้วทิ้ง **ไม่บันทึกลงดิสก์และไม่ log**
 
-> rate limiter เก็บสถานะในหน่วยความจำของ process — ถ้ารันหลาย worker/instance ให้ย้าย state ไป Redis โดยใช้อัลกอริทึมเดิม และวาง WAF/CDN (เช่น Cloudflare) ด้านหน้าสำหรับ DDoS ระดับเครือข่าย (L3/L4) ซึ่งแอปพลิเคชันป้องกันเองไม่ได้
+### 2.2 การแกะรอยและเชื่อมโยงข้อมูล (OSINT Data Correlation, `extract.py` + `store.py`)
 
----
+**ขั้นที่ 1: สกัดและทำให้เป็นรูปแบบเดียว (canonicalisation)**
 
-## 3. Frontend (HTML / Tailwind / Vanilla JS)
+ดึงเบอร์โทร เลขบัญชี อีเมล ลิงก์ Facebook และ URL ออกจากแชท SMS และข้อความ OCR แล้วแปลงให้ "ตัวเดียวกันได้ค่าเดียวกัน" เสมอ เช่น:
+- `081-234-5678`, `+66812345678` และ `๐๘๑ ๒๓๔ ๕๖๗๘` กลายเป็น `+66812345678`
+- `facebook.com/some.seller` กลายเป็น `fb:user:someseller` (Facebook ไม่สนใจจุดในชื่อ)
+- `kbank.support+x@gmail.com` กลายเป็น `kbanksupport@gmail.com`
+
+**ขั้นที่ 2: เก็บแบบอ่านย้อนกลับไม่ได้**
+
+ทุกค่าถูกแปลงเป็น `HMAC-SHA256(pepper, kind:value)` ก่อนเก็บ
+- pepper อยู่ในตัวแปรแวดล้อมของเซิร์ฟเวอร์เท่านั้น ถ้าฐานข้อมูลรั่ว ก็ย้อนกลับเป็นเบอร์หรือเลขบัญชีไม่ได้
+- ถ้าใช้ SHA-256 ธรรมดา เบอร์โทร 10 หลักจะถูก brute-force ได้ในไม่กี่นาที
+- ไม่เก็บชื่อคน ข้อความอิสระ หรือภาพ
+
+**ขั้นที่ 3: เชื่อมโยงผ่านรายงาน**
+
+รายงาน 1 ฉบับอาจมีหลายตัวระบุของมิจฉาชีพคนเดียวกัน (เบอร์ + บัญชี + Facebook + อีเมล) ตัวระบุเหล่านั้นจะเชื่อมกันผ่านรายงาน เวลาตรวจตัวระบุใดตัวหนึ่ง ระบบคืนค่า:
+- **direct**: จำนวนผู้แจ้งที่ไม่ซ้ำกัน และจำนวนรายงาน
+- **linked**: จำนวนรายงานอื่นที่เชื่อมถึงได้ใน 1 ขั้น ตัวอย่าง: เบอร์ A ถูกแจ้งคู่กับบัญชี B, และบัญชี B ถูกแจ้งในรายงานอื่นอีก 3 ฉบับ → A จะ "เชื่อมโยงกับรายงานอื่น 3 รายการ" แม้ A เองจะถูกแจ้งเพียงครั้งเดียว
+
+**คืนแค่ตัวเลข ไม่เปิดเผยตัวระบุที่เชื่อมโยงกัน** ระบบจึงใช้ประกอบแฟ้มประวัติบุคคลไม่ได้
+
+**สิ่งที่ระบบไม่ทำโดยเจตนา:**
+- ไม่ดึงข้อมูลจาก Facebook ซึ่งผิดข้อตกลงของ Facebook และต้องล็อกอิน
+- ไม่ค้นหาข้อมูลส่วนตัวของบุคคลจากแหล่งภายนอก
+- ไม่รวบรวมอีเมล เบอร์ และโปรไฟล์ของคนคนหนึ่งเป็นแฟ้มประวัติ
+
+ทั้งสามข้อเป็นทั้งความเสี่ยงทางกฎหมาย (PDPA) และเป็นเครื่องมือที่ถูกนำไปใช้คุกคามคนบริสุทธิ์ได้
+
+**ขั้นที่ 4: กันรายงานปลอม (anti-poisoning)**
+- แจ้งได้ไม่เกิน 5 ครั้งต่อวันต่อผู้แจ้ง และนับครั้งเดียวต่อผู้แจ้งต่อตัวระบุ
+- น้ำหนักความเสี่ยงคิดจาก**จำนวนผู้แจ้งที่ไม่ซ้ำกัน** ผู้แจ้งคนเดียวได้น้ำหนักต่ำและแสดงว่า "ยังไม่ยืนยัน" ทำให้คนเดียวกล่าวหาใครเป็นมิจฉาชีพไม่ได้
+- ต้องติ๊กยืนยันความจริงก่อนส่ง
+- ลบรายงานที่เก่ากว่า 2 ปีอัตโนมัติ
+
+**ขั้นที่ 5: ตรวจสลิปใช้ซ้ำ**
+
+เก็บ HMAC ของเลขที่รายการคู่กับ HMAC ของผู้ส่งตรวจ สลิปจะถูกนับว่า "ซ้ำ" ก็ต่อเมื่อ**ผู้ใช้คนอื่น**เคยส่งเลขเดียวกันมาก่อน ผู้เสียหายที่ตรวจสลิปของตัวเองซ้ำจึงไม่ถูกเตือนผิด
+
+**การรวมคะแนน (`fusion.py`)**
+- รายงานจากผู้ใช้**เพิ่ม**ความเสี่ยงได้อย่างเดียว ลดไม่ได้
+- ผู้แจ้ง 1 คน +10, 2 คน +35, ตั้งแต่ 3 คน +60, เชื่อมโยงกับรายงานอื่น +20
+
+### 2.3 เกราะป้องกัน API
+
+นอกจากที่มีในเวอร์ชันแรก (token bucket, แบนเมื่อยิงซ้ำ, ตรวจ XFF จากขวาไปซ้าย, security headers, เรียก Engine ผ่าน argv + ตรวจ SHA-256 + prlimit):
 
 | ภัยคุกคาม | กลไกป้องกัน |
 |---|---|
-| DOM-based / Reflected XSS | ไม่มี `innerHTML`/`eval`/`document.write` เลย ใช้ `createElement` + `textContent` เท่านั้น และ CSP `require-trusted-types-for 'script'; trusted-types 'none'` ทำให้เบราว์เซอร์**โยน error ทันที**ถ้ามีโค้ดใดพยายามเขียน HTML sink |
-| ผลตอบกลับจาก API ถูกปลอม/ดัดแปลง | ตรวจ content-type, จำกัดขนาด 64 KB, `JSON.parse` ใน try, validate schema (score เป็นจำนวนเต็ม 0–100, level ในเซต, finding code ตาม regex); code ใช้เป็น key ของ `Map` เท่านั้น ไม่เคยแสดงข้อความจาก API ตรง ๆ |
-| Script injection จากภายนอก | CSP `script-src 'self'` ไม่มี inline script, ไม่มี CDN JavaScript (Tailwind คอมไพล์ตอน build) |
-| Clickjacking | `frame-ancestors 'none'` + `X-Frame-Options: DENY` + frame-buster สำรองใน JS |
-| Self-XSS ผ่าน Console | ข้อความเตือนภาษาไทยใน Console + ไม่มีข้อมูลลับใดอยู่ฝั่ง client (การ “บล็อก DevTools” ทำไม่ได้จริงและเลี่ยงได้เสมอ จึงไม่ใช้) |
-| Prototype pollution | ใช้ `Map` แทน object lookup และ `Object.freeze(Object.prototype)` |
-| สแปมปุ่ม | in-flight lock, cooldown 1.5 วิ, debounce การตรวจล่วงหน้า 250 ms |
-| เน็ตล่ม/API ล่ม | AbortController timeout 10 วิ, retry สูงสุด 2 ครั้งแบบ exponential backoff + jitter เฉพาะ error ชั่วคราว, ข้อความ error ภาษาไทยพร้อมปุ่มลองใหม่, ตรวจสถานะ online/offline, ตัวจับ error สุดท้ายคลาย loading state เสมอ |
-| ส่ง cookie/referrer รั่ว | `credentials: "omit"`, `referrerPolicy: "no-referrer"`, `redirect: "error"` |
-| Open redirect ของปลายทาง API | `tcs-api-base` ถูกตัดเหลือเฉพาะ origin และต้องเป็น https |
+| ยิงอัปโหลดให้ CPU เต็ม | การอัปโหลดใช้ 4 token (ข้อความใช้ 1) และ OCR ทำได้ทีละงาน |
+| Cross-site multipart (simple request ข้าม preflight) | endpoint อัปโหลดต้องมี header `X-TCS-Client: web` ซึ่งบังคับให้เกิด CORS preflight และต้องเป็น `multipart/form-data` ที่มี boundary |
+| Body ใหญ่ / ส่งช้า | จำกัดแยกตาม path (JSON 64 KB, อัปโหลด 5 MB + overhead) และนับไบต์จริง + timeout ต่อ chunk |
+| Multipart parser DoS | ตรึงเวอร์ชัน python-multipart ที่แก้ CVE แล้ว และ body ถูกจำกัดขนาดก่อนถึง parser |
+| Injection ผ่านยอดเงิน | `expected_amount` ต้องตรง regex ตัวเลข และ fact sheet กรองเหลือเฉพาะ ASCII ที่อนุญาต |
+| ส่ง key ปลอม/ซ้ำใน fact sheet | Engine ปฏิเสธ key ที่ไม่รู้จักและ key ซ้ำ (`SL_BAD_INPUT`) |
+| ฐานข้อมูลล่ม | การวิเคราะห์ยังทำงานต่อ แค่ข้ามข้อมูลรายงาน |
+| ตั้งค่าไม่ปลอดภัย | production ไม่ยอมเริ่มทำงานถ้าไม่มี `TCS_HASH_PEPPER` (≥ 32 ตัว) หรือใช้ Postgres โดยไม่มี `sslmode=require` |
+
+---
+
+## 3. Frontend
+
+| ภัยคุกคาม | กลไกป้องกัน |
+|---|---|
+| DOM-based / Reflected XSS | ไม่มี HTML sink เลย รวมถึงข้อความ OCR ที่อ่านจากรูป ซึ่งผู้โจมตีอาจใส่ `<script>` ไว้ในภาพ แสดงด้วย `textContent` เท่านั้น + CSP Trusted Types ทำให้เบราว์เซอร์บล็อก HTML sink ทั้งหมด |
+| ผลจาก API ถูกปลอม | ตรวจ schema ของทุกฟิลด์ใหม่ (identifiers, slip, ocr_text) ก่อนแสดง โค้ดผลตรวจและชื่อธนาคารใช้เป็น key ของ `Map` เท่านั้น |
+| ไฟล์ปลอม | ตรวจชนิด + magic bytes + ขนาดก่อนอัปโหลด, preview ด้วย `blob:` URL ที่ revoke ทุกครั้ง (CSP อนุญาตแค่ `img-src blob:`) |
+| สแปมปุ่ม | in-flight lock, cooldown, debounce, ปุ่มรายงานล็อกระหว่างส่ง |
+| API หลับ (free tier) | ปลุก API ตั้งแต่เปิดหน้าเว็บ และรอได้สูงสุด 80 วินาทีพร้อมแสดงสถานะ แทนการขึ้น error |
+| Clickjacking / Self-XSS / Prototype pollution | เหมือนเวอร์ชันแรก |
 
 ---
 
 ## Checklist ก่อนขึ้น Production
 
-1. `gnatprove -P engine/tcs_engine.gpr --level=2` ต้องผ่านทั้งหมด
-2. ตั้ง `TCS_ENGINE_SHA256` ตามค่าที่ Docker build พิมพ์ออกมา
-3. แก้โดเมน API ใน `frontend/public/index.html` (`tcs-api-base`) **และ** `connect-src` ใน `frontend/vercel.json` ให้ตรงกัน
-4. ตั้ง `TCS_ALLOWED_ORIGINS` = โดเมน Vercel, `TCS_ALLOWED_HOSTS`, `TCS_TRUSTED_PROXIES`
-5. รัน container ด้วย `--read-only --cap-drop=ALL --security-opt=no-new-privileges --pids-limit`
-6. ทบทวนรายชื่อโดเมนทางการใน `tcs_url.adb` (เป็น trust anchor) เป็นระยะ
-7. ส่งเว็บเข้า HSTS preload list และทดสอบ header ด้วย securityheaders.com / Mozilla Observatory
+1. `gnatprove -P engine/tcs_engine.gpr --level=2` ต้องผ่านทั้งหมด และ `engine/test_engine.sh` ต้องให้ผลตามที่คาด
+2. ตั้ง `TCS_HASH_PEPPER` เป็นค่าสุ่มอย่างน้อย 32 ตัวอักษร **ห้ามเปลี่ยนภายหลัง** เพราะถ้าเปลี่ยน รายงานเดิมจะค้นไม่เจอทั้งหมด
+3. ตั้ง `TCS_DATABASE_URL` เป็น Postgres (`sslmode=require`) ไม่งั้นรายงานจะหายทุกครั้งที่เซิร์ฟเวอร์รีสตาร์ท
+4. ทดสอบตัวตรวจสลิปกับสลิปจริงของแต่ละธนาคารและ TrueMoney แล้วปรับรูปแบบใน `slipparse.py` หากจำเป็น
+5. อัปเดต `TCS_ENGINE_SHA256` ทุกครั้งที่ build Engine ใหม่
+6. มีช่องทางให้ผู้ถูกแจ้งผิดขอให้ลบรายงาน (สิทธิ์ตาม PDPA) ก่อนเปิดใช้ฟีเจอร์รายงานในวงกว้าง

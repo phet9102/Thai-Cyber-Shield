@@ -8,12 +8,12 @@ ENGINE = "tcs-ada/1.0"
 
 
 def main() -> int:
-    if len(sys.argv) != 2 or sys.argv[1] not in {"sms", "url", "phone"}:
+    if len(sys.argv) != 2 or sys.argv[1] not in {"sms", "url", "phone", "trade", "slip", "social", "email"}:
         print(json.dumps({"ok": False, "engine": ENGINE, "error": "USAGE"}))
         return 64
     mode = sys.argv[1]
-    raw = sys.stdin.buffer.read(8193)
-    if len(raw) > 8192:
+    raw = sys.stdin.buffer.read(16385)
+    if len(raw) > 16384:
         print(json.dumps({"ok": False, "engine": ENGINE, "error": "INPUT_TOO_LONG"}))
         return 2
     text = raw.decode("utf-8")
@@ -32,6 +32,15 @@ def main() -> int:
             score, findings, host = 20, ["URL_SHORTENER"], "bit.ly"
     if mode == "sms" and "ด่วน" in text:
         score, findings = 15, ["SMS_URGENCY"]
+    if mode == "trade" and "ไม่รับกลาง" in text:
+        score, findings = 55, ["TR_REFUSE_ESCROW", "COMBO_PAY_FIRST_NO_ESCROW"]
+    if mode == "slip":
+        if "bank=" not in text:
+            print(json.dumps({"ok": False, "engine": ENGINE, "error": "INPUT_INVALID_UTF8"}))
+            return 2
+        score, findings = (70, ["SL_DUPLICATE"]) if "dup=1" in text else (0, ["SL_QR_VALID"])
+    if mode in ("social", "email"):
+        host = "facebook.com" if mode == "social" else "gmail.com"
     level = "CRITICAL" if score >= 80 else "LOW" if score >= 15 else "SAFE"
     print(json.dumps({"ok": True, "engine": ENGINE, "mode": mode, "score": score,
                       "level": level, "findings": findings, "host": host}))

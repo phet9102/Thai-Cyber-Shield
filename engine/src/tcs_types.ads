@@ -14,7 +14,7 @@ package TCS_Types with SPARK_Mode => On is
    ---------------------------------------------------------------------------
    type Byte is mod 2 ** 8;
 
-   Max_Raw_Bytes : constant := 8_192;          --  hard ceiling on stdin bytes
+   Max_Raw_Bytes : constant := 16_384;         --  hard ceiling on stdin bytes
 
    subtype Raw_Length is Natural  range 0 .. Max_Raw_Bytes;
    subtype Raw_Index  is Positive range 1 .. Max_Raw_Bytes;
@@ -23,12 +23,15 @@ package TCS_Types with SPARK_Mode => On is
    ---------------------------------------------------------------------------
    --  Decoded Unicode text (UTF-32 code points, validated)
    ---------------------------------------------------------------------------
-   Max_Code_Points : constant := 2_048;
+   Max_Code_Points : constant := 4_096;
 
    --  Per-analyzer limits, all <= Max_Code_Points
    Max_SMS_CP   : constant := 1_000;
    Max_URL_CP   : constant := 2_048;
    Max_Phone_CP : constant := 32;
+   Max_Trade_CP : constant := 4_000;   --  chat transcript (typed or OCR)
+   Max_Slip_CP  : constant := 1_024;   --  key=value facts from the vision layer
+   Max_Email_CP : constant := 254;     --  RFC 5321 path limit
 
    subtype CP_Length is Natural  range 0 .. Max_Code_Points;
    subtype CP_Index  is Positive range 1 .. Max_Code_Points;
@@ -126,9 +129,66 @@ package TCS_Types with SPARK_Mode => On is
       F_Ph_Service_Shortcode,
       F_Ph_Thai_Mobile,
       F_Ph_Thai_Landline,
-      F_Ph_Invalid_Format);
+      F_Ph_Invalid_Format,
+      --  Chat / item-trade fraud heuristics
+      F_Tr_Pay_First,
+      F_Tr_Refuse_Escrow,
+      F_Tr_Fake_Escrow,
+      F_Tr_Urgency,
+      F_Tr_Too_Good,
+      F_Tr_Credential_Request,
+      F_Tr_Off_Platform,
+      F_Tr_Third_Party_Account,
+      F_Tr_Overpay_Refund,
+      F_Tr_Fee_Trap,
+      F_Tr_Angpao_Payment,
+      F_Tr_Slip_Excuse,
+      F_Tr_Pressure_Threat,
+      F_Tr_Game_Context,
+      F_Tr_Contains_Account_No,
+      F_Combo_Pay_First_No_Escrow,
+      F_Combo_Escrow_Link,
+      F_Combo_Takeover_Urgency,
+      --  Transfer-slip verification
+      F_Sl_Qr_Valid,
+      F_Sl_No_Qr,
+      F_Sl_Qr_Malformed,
+      F_Sl_Qr_Crc_Invalid,
+      F_Sl_Qr_Bank_Mismatch,
+      F_Sl_Ref_Mismatch,
+      F_Sl_Ref_Format,
+      F_Sl_Bank_Unknown,
+      F_Sl_Amount_Missing,
+      F_Sl_Amount_Invalid,
+      F_Sl_Amount_Mismatch,
+      F_Sl_Time_Missing,
+      F_Sl_Time_Invalid,
+      F_Sl_Future_Time,
+      F_Sl_Old_Slip,
+      F_Sl_Edited_Software,
+      F_Sl_Text_Inconsistent,
+      F_Sl_Duplicate,
+      F_Sl_Low_Ocr,
+      F_Sl_Truemoney,
+      F_Sl_Bad_Input,
+      --  Facebook / social link
+      F_So_Facebook_Official,
+      F_So_Profile_Numeric,
+      F_So_New_Account_Id,
+      F_So_Share_Link,
+      F_So_Link_Shim,
+      F_So_Marketplace,
+      F_So_Fb_Lookalike,
+      F_So_Phish_Path,
+      --  E-mail address
+      F_Em_Invalid,
+      F_Em_Free_Provider,
+      F_Em_Disposable,
+      F_Em_Brand_In_Free,
+      F_Em_Digit_Heavy,
+      F_Em_Unicode);
 
-   Max_Findings : constant := 24;
+   Max_Findings : constant := 32;
    subtype Finding_Count is Natural range 0 .. Max_Findings;
    subtype Finding_Index is Positive range 1 .. Max_Findings;
    type Finding_Array is array (Finding_Index) of Finding_Code;

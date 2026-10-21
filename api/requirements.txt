@@ -4,6 +4,10 @@ fastapi==0.115.12
 starlette==0.46.2
 pydantic==2.11.4
 uvicorn[standard]==0.34.2
+python-multipart==0.0.20      # multipart parser (pinned: past versions had DoS CVEs)
+pillow==11.2.1                # image decoding (bomb guard enabled in vision.py)
+pyzbar==0.1.9                 # QR decoding via libzbar0
+psycopg[binary]==3.2.9        # PostgreSQL report store (optional; SQLite fallback)
 # tests
 pytest==8.3.5
 httpx==0.28.1

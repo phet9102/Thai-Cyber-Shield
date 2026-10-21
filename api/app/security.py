@@ -28,6 +28,10 @@ ASGIApp = Callable[[Scope, Receive, Send], Awaitable[None]]
 
 log = logging.getLogger("tcs.security")
 
+# Endpoints that accept multipart image uploads (OCR = expensive)
+UPLOAD_PATHS = frozenset({"/api/v1/analyze/slip", "/api/v1/analyze/chat-image"})
+REPORT_PATH = "/api/v1/reports"
+
 
 def _header(scope: Scope, name: bytes) -> List[str]:
     return [
@@ -157,9 +161,18 @@ class RateLimitMiddleware:
         peer = (scope.get("client") or (None, None))[0]
         key = client_key(peer, _header(scope, b"x-forwarded-for"), self.settings.trusted_proxies)
 
+        scope.setdefault("state", {})["client_key"] = key   # used by report/slip logic
+
         method = scope.get("method", "GET")
         path = scope.get("path", "")
-        cost = 0.2 if method in ("OPTIONS", "HEAD") or path == "/api/health" else 1.0
+        if method in ("OPTIONS", "HEAD") or path == "/api/health":
+            cost = 0.2
+        elif path in UPLOAD_PATHS:
+            cost = 4.0            # OCR costs CPU seconds - spend tokens accordingly
+        elif path == REPORT_PATH:
+            cost = 3.0
+        else:
+            cost = 1.0
 
         decision = await self.limiter.check(key, cost)
         if not decision.allowed:
@@ -180,16 +193,20 @@ class BodyLimitMiddleware:
 
     def __init__(self, app: ASGIApp, settings: Settings) -> None:
         self.app = app
-        self.max_bytes = settings.max_body_bytes
+        self.json_max = settings.max_body_bytes
+        self.upload_max = settings.max_upload_bytes + 64 * 1024   # multipart overhead
         self.timeout = settings.body_read_timeout_s
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http" or scope.get("method") in ("GET", "HEAD", "OPTIONS"):
             return await self.app(scope, receive, send)
 
+        # local variable, never instance state: the middleware is shared by
+        # concurrent requests
+        max_bytes = self.upload_max if scope.get("path") in UPLOAD_PATHS else self.json_max
         cl = _header(scope, b"content-length")
         if cl:
-            if len(cl) > 1 or not cl[0].isdigit() or int(cl[0]) > self.max_bytes:
+            if len(cl) > 1 or not cl[0].isdigit() or int(cl[0]) > max_bytes:
                 await send_json_error(send, 413, "PAYLOAD_TOO_LARGE", _rid(scope))
                 return
 
@@ -204,7 +221,7 @@ class BodyLimitMiddleware:
             if message["type"] == "http.disconnect":
                 return
             body.extend(message.get("body", b""))
-            if len(body) > self.max_bytes:
+            if len(body) > max_bytes:
                 await send_json_error(send, 413, "PAYLOAD_TOO_LARGE", _rid(scope))
                 return
             more = message.get("more_body", False)
@@ -223,8 +240,11 @@ class BodyLimitMiddleware:
 
 # ---------------------------------------------------------------------------
 class ContentTypeMiddleware:
-    """State-changing requests must be JSON. Blocks form-encoded CSRF and
-    'simple request' tricks that bypass CORS preflight."""
+    """State-changing requests must be JSON - except the image-upload
+    endpoints, which accept multipart/form-data ONLY together with the
+    custom `X-TCS-Client: web` header. A custom header turns the request
+    into a CORS "non-simple" request, so a foreign site cannot make a
+    victim's browser post images here without passing our CORS preflight."""
 
     def __init__(self, app: ASGIApp) -> None:
         self.app = app
@@ -234,7 +254,13 @@ class ContentTypeMiddleware:
             ctype = (_header(scope, b"content-type") or [""])[0].lower()
             media = ctype.split(";", 1)[0].strip()
             params = ctype.split(";", 1)[1].strip() if ";" in ctype else ""
-            if media != "application/json" or (params and params.replace(" ", "") != "charset=utf-8"):
+            if scope.get("path") in UPLOAD_PATHS:
+                client = (_header(scope, b"x-tcs-client") or [""])[0]
+                if media != "multipart/form-data" or not params.startswith("boundary=") \
+                        or client != "web":
+                    await send_json_error(send, 415, "UNSUPPORTED_MEDIA_TYPE", _rid(scope))
+                    return
+            elif media != "application/json" or (params and params.replace(" ", "") != "charset=utf-8"):
                 await send_json_error(send, 415, "UNSUPPORTED_MEDIA_TYPE", _rid(scope))
                 return
         await self.app(scope, receive, send)

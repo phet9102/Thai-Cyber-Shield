@@ -3,7 +3,8 @@
 --
 --  Protocol (designed to be called by the API with an argv array, no shell):
 --
---      tcs_engine sms|url|phone   < untrusted UTF-8 bytes on stdin
+--      tcs_engine sms|url|phone|trade|slip|social|email
+--                                 < untrusted UTF-8 bytes on stdin
 --
 --    * argv carries ONLY the mode, checked against a closed set. User data
 --      never appears in argv (no option injection, no /proc/<pid>/cmdline
@@ -31,20 +32,25 @@ with TCS_UTF8;   use TCS_UTF8;
 with TCS_SMS;
 with TCS_URL;
 with TCS_Phone;
+with TCS_Trade;
+with TCS_Slip;
+with TCS_Social;
 with TCS_Output;
 
 procedure TCS_Main with SPARK_Mode => Off is
 
    package CL renames Ada.Command_Line;
 
-   type Mode_Kind is (Mode_SMS, Mode_URL, Mode_Phone);
+   type Mode_Kind is
+     (Mode_SMS, Mode_URL, Mode_Phone, Mode_Trade, Mode_Slip, Mode_Social,
+      Mode_Email);
 
    Exit_Ok       : constant CL.Exit_Status := 0;
    Exit_Rejected : constant CL.Exit_Status := 2;
    Exit_Fault    : constant CL.Exit_Status := 3;
    Exit_Usage    : constant CL.Exit_Status := 64;
 
-   --  Library-level-sized buffers live in this frame (~8 KB + 3 x 8 KB);
+   --  Bounded buffers live in this frame (16 KB raw + 2 x 16 KB text);
    --  no heap allocation anywhere in the engine.
    Raw      : Raw_Buffer := (others => 0);
    Raw_Len  : Raw_Length := 0;
@@ -85,15 +91,23 @@ procedure TCS_Main with SPARK_Mode => Off is
    ---------------------------------------------------------------------------
    function Mode_Name (M : Mode_Kind) return String is
      (case M is
-         when Mode_SMS   => "sms",
-         when Mode_URL   => "url",
-         when Mode_Phone => "phone");
+         when Mode_SMS    => "sms",
+         when Mode_URL    => "url",
+         when Mode_Phone  => "phone",
+         when Mode_Trade  => "trade",
+         when Mode_Slip   => "slip",
+         when Mode_Social => "social",
+         when Mode_Email  => "email");
 
    function Max_CP_For (M : Mode_Kind) return CP_Length is
      (case M is
-         when Mode_SMS   => Max_SMS_CP,
-         when Mode_URL   => Max_URL_CP,
-         when Mode_Phone => Max_Phone_CP);
+         when Mode_SMS    => Max_SMS_CP,
+         when Mode_URL    => Max_URL_CP,
+         when Mode_Phone  => Max_Phone_CP,
+         when Mode_Trade  => Max_Trade_CP,
+         when Mode_Slip   => Max_Slip_CP,
+         when Mode_Social => Max_URL_CP,
+         when Mode_Email  => Max_Email_CP);
 
    procedure Reject (Code : String) is
    begin
@@ -122,6 +136,14 @@ begin
          Mode := Mode_URL;
       elsif A = "phone" then
          Mode := Mode_Phone;
+      elsif A = "trade" then
+         Mode := Mode_Trade;
+      elsif A = "slip" then
+         Mode := Mode_Slip;
+      elsif A = "social" then
+         Mode := Mode_Social;
+      elsif A = "email" then
+         Mode := Mode_Email;
       else
          TCS_Output.Emit_Error ("USAGE");
          CL.Set_Exit_Status (Exit_Usage);
@@ -167,6 +189,18 @@ begin
       when Mode_Phone =>
          TCS_Phone.Analyze (Decoded, Result);
          TCS_Output.Emit_Result (Mode_Name (Mode), Result);
+      when Mode_Trade =>
+         TCS_Trade.Analyze (Decoded, Result);
+         TCS_Output.Emit_Result (Mode_Name (Mode), Result);
+      when Mode_Slip =>
+         TCS_Slip.Analyze (Decoded, Result);
+         TCS_Output.Emit_Result (Mode_Name (Mode), Result);
+      when Mode_Social =>
+         TCS_Social.Analyze_Facebook (Decoded, Result, Host);
+         TCS_Output.Emit_Result (Mode_Name (Mode), Result, Host);
+      when Mode_Email =>
+         TCS_Social.Analyze_Email (Decoded, Result, Host);
+         TCS_Output.Emit_Result (Mode_Name (Mode), Result, Host);
    end case;
 
    CL.Set_Exit_Status (Exit_Ok);

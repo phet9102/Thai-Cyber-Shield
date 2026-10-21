@@ -32,6 +32,23 @@ run phone '๐๘๑๒๓๔๕๖๗๘'
 run phone '1900-123-456'
 run phone '081<script>'
 
+echo "== TRADE =="
+run trade 'ขายไอดี ROV โอนก่อนนะ ไม่รับกลาง ถ้าจะใช้กลางต้องแอดมินกลางของผม ทักไลน์ มีคนรอ บัญชีแม่ 123-4-56789-0'
+run trade 'สนใจครับ ขอดูรูปเพิ่มได้ไหม นัดรับของที่สถานีได้เลย'
+
+echo "== SLIP =="
+QR=004500060000010103004022420261021KBANK000123456785102TH91049614
+run slip "$(printf 'bank=KBANK\nref=20261021KBANK00012345678\namount=1500.00\nexpected=1500.00\ntime=202610212305\nnow=202610212310\nqr=%s\nocr_conf=88\n' "$QR")"
+run slip "$(printf 'bank=SCB\nref=20261021KBANK00012345678\namount=1500.00\nexpected=2500\ntime=202610252305\nnow=202610212310\nqr=%s0\nedited=1\ndup=1\n' "$QR")"
+run slip "$(printf 'bank=KBANK\nbank=SCB\n')"
+run slip "$(printf 'time=202602300101\nnow=202610212310\n')"
+
+echo "== SOCIAL / EMAIL =="
+run social 'https://www.facebook.com/profile.php?id=61551234567890'
+run social 'https://facebook-copyright-appeal.help/checkpoint/verify'
+run email 'kbank.support@gmail.com'
+run email 'someone@mailinator.com'
+
 echo "== Rejections =="
 printf 'abc\x00def' | "$BIN" sms || echo "exit=$?"
 printf '\xc0\xaf'    | "$BIN" url || echo "exit=$?"

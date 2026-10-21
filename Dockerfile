@@ -22,6 +22,7 @@ RUN gprbuild -P tcs_engine.gpr -XBUILD=release -p \
 FROM python:3.12-slim-bookworm
 RUN apt-get update \
  && apt-get install -y --no-install-recommends libgnat-12 util-linux \
+        tesseract-ocr tesseract-ocr-tha tesseract-ocr-eng libzbar0 \
  && rm -rf /var/lib/apt/lists/* \
  && useradd --system --uid 10001 --no-create-home --shell /usr/sbin/nologin tcs
 
@@ -36,7 +37,9 @@ COPY --chown=root:root --chmod=0555 api/app ./app
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     TCS_ENV=production \
-    TCS_ENGINE_PATH=/opt/tcs/bin/tcs_engine
+    TCS_ENGINE_PATH=/opt/tcs/bin/tcs_engine \
+    TCS_TESSERACT_PATH=/usr/bin/tesseract \
+    OMP_THREAD_LIMIT=1
 
 USER tcs
 EXPOSE 8000
