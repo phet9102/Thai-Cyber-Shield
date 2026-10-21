@@ -150,10 +150,16 @@ class SecureEngineRunner:
             raise RuntimeError("engine binary is group/world writable")
         if not os.access(real, os.X_OK):
             raise RuntimeError("engine binary is not executable")
-        if expected_sha256:
-            digest = hashlib.sha256(real.read_bytes()).hexdigest()
-            if not hmac.compare_digest(digest, expected_sha256):
-                raise RuntimeError("engine binary SHA-256 mismatch (tampered?)")
+        # The digest is a public fingerprint of the binary (not a secret), so it
+        # is logged on every start: operators copy it into TCS_ENGINE_SHA256
+        # after each rebuild instead of hunting through cached build logs.
+        digest = hashlib.sha256(real.read_bytes()).hexdigest()
+        log.warning("ENGINE_SHA256=%s", digest)
+        if expected_sha256 and not hmac.compare_digest(digest, expected_sha256):
+            raise RuntimeError(
+                "engine binary SHA-256 mismatch (tampered or rebuilt?) - "
+                f"actual ENGINE_SHA256={digest}"
+            )
         return str(real)
 
     @staticmethod
